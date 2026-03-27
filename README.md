@@ -108,7 +108,7 @@ Each execution step produces one snapshot:
 | Visualization | Canvas API + SVG |
 | Python Execution | Pyodide (WebAssembly) |
 | Code Tracing | Python `sys.settrace` via Pyodide |
-| State Management | Zustand |
+| State Management | React Context + useReducer |
 
 ---
 
@@ -187,7 +187,7 @@ leettrace/
 │   │   ├── main.tsx               # React entry
 │   │   ├── App.tsx                # Main layout
 │   │   ├── store/
-│   │   │   └── useTraceStore.ts   # Zustand state management
+│   │   │   └── TraceContext.tsx    # useContext + useReducer state management
 │   │   ├── components/
 │   │   │   ├── Controls.tsx       # Play/pause/step/speed
 │   │   │   ├── VariableInspector.tsx
@@ -260,7 +260,7 @@ If you're new to any of these, here are starting points:
 - **Message Passing**: https://developer.chrome.com/docs/extensions/develop/concepts/messaging
 - **Pyodide (Python in browser)**: https://pyodide.org/en/stable/
 - **Python sys.settrace**: https://docs.python.org/3/library/sys.html#sys.settrace
-- **Zustand**: https://docs.pmnd.rs/zustand
+- **React useReducer**: https://react.dev/reference/react/useReducer
 - **CRXJS Vite Plugin**: https://crxjs.dev/vite-plugin
 - **Canvas API**: https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API
 - **SVG basics**: https://developer.mozilla.org/en-US/docs/Web/SVG
@@ -281,4 +281,3 @@ If you're new to any of these, here are starting points:
 ## License
 
 MIT
-
