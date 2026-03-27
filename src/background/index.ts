@@ -1,4 +1,6 @@
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error(error));
+// Runs on every service worker start
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
-console.log('[LeetTrace] Background worker loaded');
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('[LeetTrace] Background worker loaded');
+});
