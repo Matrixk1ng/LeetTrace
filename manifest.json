@@ -1,0 +1,17 @@
+{
+"manifest_version": 3,
+"name": "LeetTrace",
+"permissions": ["sidePanel", "activeTab", "storage"],
+"host_permissions": ["https://leetcode.com/*"],
+"side_panel": {"default_path": "src/panel/index.html"},
+"background": {
+    "service_worker": "src/background/index.ts", "type": "module"
+  },
+"action": {
+    "default_title": "LeetTrace",
+    "default_icon": {}
+  },
+"icons": {
+    
+  }
+}
