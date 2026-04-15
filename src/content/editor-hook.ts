@@ -1,4 +1,6 @@
 const MONACO_RESPONSE_TYPE = 'LEETTRACE_MONACO_EXTRACT_RESULT';
+const MONACO_READY_TYPE = 'LEETTRACE_MONACO_EXTRACT_READY';
+const MONACO_ERROR_TYPE = 'LEETTRACE_MONACO_EXTRACT_ERROR';
 const DEBUG_STORAGE_KEY = 'leettrace.debug';
 
 function isDebugEnabled(): boolean {
@@ -116,142 +118,44 @@ function detectLeetCodeLanguage(): string {
 
 function injectMonacoReadScript(requestId: string): void {
   const script = document.createElement('script');
-  const nonceScript = document.querySelector('script[nonce]') as HTMLScriptElement | null;
+  const nonceElement = document.querySelector('[nonce]') as HTMLElement | null;
+  const bridgeUrl = chrome.runtime.getURL('monaco-bridge.js');
 
-  if (nonceScript?.nonce) {
-    script.nonce = nonceScript.nonce;
+  const nonce = nonceElement?.getAttribute('nonce') ?? null;
+  if (nonce) {
+    script.nonce = nonce;
+    script.setAttribute('nonce', nonce);
   }
 
-  script.textContent = `(() => {
-    const startedAt = Date.now();
-    const maxWaitMs = 2600;
-    let finished = false;
-    let amdAttempted = false;
+  script.src = bridgeUrl;
+  script.async = false;
+  script.setAttribute('data-request-id', requestId);
+  script.setAttribute('data-response-type', MONACO_RESPONSE_TYPE);
+  script.setAttribute('data-ready-type', MONACO_READY_TYPE);
+  script.setAttribute('data-error-type', MONACO_ERROR_TYPE);
 
-    const postResult = (code) => {
-      if (finished) {
-        return;
-      }
+  script.addEventListener('load', () => {
+    script.remove();
+  });
 
-      finished = true;
-      window.postMessage({
-        type: '${MONACO_RESPONSE_TYPE}',
-        requestId: '${requestId}',
-        code,
-      }, '*');
-    };
+  script.addEventListener('error', () => {
+    window.postMessage({
+      type: MONACO_ERROR_TYPE,
+      requestId,
+      reason: 'bridge-load-failed',
+    }, '*');
+    script.remove();
+  });
 
-    const readMonacoValue = (monacoApi) => {
-      if (!monacoApi || !monacoApi.editor || typeof monacoApi.editor.getModels !== 'function') {
-        return null;
-      }
-
-      const models = monacoApi.editor.getModels();
-      if (!Array.isArray(models) || models.length === 0) {
-        return null;
-      }
-
-      for (const model of models) {
-        const value = model && typeof model.getValue === 'function' ? model.getValue() : null;
-        if (typeof value === 'string' && value.length > 0) {
-          return value;
-        }
-      }
-
-      return null;
-    };
-
-    const findMonacoCandidates = () => {
-      const win = window;
-      const candidates = [win.monaco, win._monaco, win.Monaco];
-
-      for (const key of Object.getOwnPropertyNames(win)) {
-        if (!/monaco/i.test(key)) {
-          continue;
-        }
-
-        try {
-          candidates.push(win[key]);
-        } catch {
-          // Ignore inaccessible window properties.
-        }
-      }
-
-      return candidates;
-    };
-
-    const readFromCandidates = () => {
-      const candidates = findMonacoCandidates();
-      for (const candidate of candidates) {
-        try {
-          const value = readMonacoValue(candidate);
-          if (typeof value === 'string' && value.length > 0) {
-            return value;
-          }
-        } catch {
-          // Keep scanning candidates.
-        }
-      }
-
-      return null;
-    };
-
-    const attemptAmdResolve = () => {
-      const win = window;
-      if (amdAttempted || typeof win.require !== 'function') {
-        return;
-      }
-
-      amdAttempted = true;
-
-      try {
-        win.require(['vs/editor/editor.main'], (monacoApi) => {
-          const value = readMonacoValue(monacoApi);
-          if (typeof value === 'string' && value.length > 0) {
-            postResult(value);
-          }
-        });
-      } catch {
-        // Keep polling through direct candidates.
-      }
-    };
-
-    const tryRead = () => {
-      const directValue = readFromCandidates();
-      if (typeof directValue === 'string' && directValue.length > 0) {
-        postResult(directValue);
-        return;
-      }
-
-      attemptAmdResolve();
-
-      if (Date.now() - startedAt >= maxWaitMs) {
-        postResult('');
-        return;
-      }
-
-      if (!finished) {
-        window.setTimeout(tryRead, 80);
-      }
-    };
-
-    try {
-      tryRead();
-    } catch {
-      if (!finished) {
-        postResult('');
-      }
-    }
-  })();`;
-
-  document.documentElement.appendChild(script);
-  script.remove();
+  const mountNode = document.head ?? document.documentElement;
+  mountNode.appendChild(script);
 }
 
 function extractFromMonacoApi(timeoutMs = 3200): Promise<string | null> {
   const requestId = `leettrace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   return new Promise((resolve) => {
+    let scriptReady = false;
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window) {
         return;
@@ -261,9 +165,28 @@ function extractFromMonacoApi(timeoutMs = 3200): Promise<string | null> {
         type?: string;
         requestId?: string;
         code?: unknown;
+        reason?: string;
+        detail?: string;
       };
 
-      if (data?.type !== MONACO_RESPONSE_TYPE || data?.requestId !== requestId) {
+      if (data?.requestId !== requestId) {
+        return;
+      }
+
+      if (data?.type === MONACO_READY_TYPE) {
+        scriptReady = true;
+        debugLog('Monaco bridge script executed');
+        return;
+      }
+
+      if (data?.type !== MONACO_RESPONSE_TYPE) {
+        if (data?.type === MONACO_ERROR_TYPE) {
+          cleanup();
+          debugLog('Monaco bridge script failed', {
+            reason: data.reason,
+          });
+          resolve(null);
+        }
         return;
       }
 
@@ -276,7 +199,9 @@ function extractFromMonacoApi(timeoutMs = 3200): Promise<string | null> {
 
     const timeoutId = window.setTimeout(() => {
       cleanup();
-      debugLog('Monaco API extraction timed out; switching to DOM fallback');
+      debugLog('Monaco API extraction timed out; switching to DOM fallback', {
+        bridgeExecuted: scriptReady,
+      });
       resolve(null);
     }, timeoutMs);
 
