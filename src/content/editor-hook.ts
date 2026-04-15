@@ -28,24 +28,7 @@ function inferLanguageFromLabel(label: string): string {
   const normalized = label.toLowerCase().replace(/\s+/g, '');
 
   if (normalized.includes('python3')) return 'python3';
-  if (normalized === 'python') return 'python';
-  if (normalized.includes('c++') || normalized.includes('cpp')) return 'cpp';
-  if (normalized.includes('java') && !normalized.includes('javascript')) return 'java';
-  if (normalized.includes('javascript') || normalized === 'js') return 'javascript';
-  if (normalized.includes('typescript') || normalized === 'ts') return 'typescript';
-  if (normalized.includes('c#') || normalized.includes('csharp')) return 'csharp';
-  if (normalized === 'c') return 'c';
-  if (normalized.includes('golang') || normalized === 'go') return 'golang';
-  if (normalized.includes('rust')) return 'rust';
-  if (normalized.includes('swift')) return 'swift';
-  if (normalized.includes('kotlin')) return 'kotlin';
-  if (normalized.includes('php')) return 'php';
-  if (normalized.includes('ruby')) return 'ruby';
-  if (normalized.includes('scala')) return 'scala';
-  if (normalized.includes('perl')) return 'perl';
-  if (normalized.includes('racket')) return 'racket';
-  if (normalized.includes('erlang')) return 'erlang';
-  if (normalized.includes('elixir')) return 'elixir';
+  if (normalized.includes('python')) return 'python';
 
   return 'unsupported';
 }
@@ -98,19 +81,6 @@ function detectLeetCodeLanguage(): string {
   const languageKeywords = [
     'python3',
     'python',
-    'c++',
-    'java',
-    'javascript',
-    'typescript',
-    'c#',
-    'golang',
-    'go',
-    'rust',
-    'swift',
-    'kotlin',
-    'php',
-    'ruby',
-    'scala',
   ];
 
   const buttons = document.querySelectorAll('button');
