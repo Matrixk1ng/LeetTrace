@@ -1,6 +1,6 @@
-import { extractCode } from './editor-hook';
+import { extractCode, isDebugEnabled } from './editor-hook';
 import { injectFAB } from './fab';
-import { clearGutterAnnotations, updateGutterAnnotations } from './gutter';
+import { clearGutterAnnotations, updateGutterAnnotations, type GutterAnnotation } from './gutter';
 
 const DEBUG_EVENT = 'LEETTRACE_DEBUG_EXTRACT';
 const DEBUG_GUTTER_UPDATE_EVENT = 'LEETTRACE_DEBUG_GUTTER_UPDATE';
@@ -10,12 +10,6 @@ const GUTTER_CLEAR_DEBOUNCE_MS = 1000;
 
 let editorObserver: MutationObserver | null = null;
 let clearDebounceTimer: number | null = null;
-
-interface GutterAnnotation {
-	variable: string;
-	value: string;
-	changed: boolean;
-}
 
 interface RuntimeMessage {
 	type?: string;
@@ -28,11 +22,13 @@ interface RuntimeMessage {
 async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<{ code: string; language: string }> {
 	const payload = await extractCode();
 
-	console.info('[LeetTrace][content] extraction result', {
-		source,
-		language: payload.language,
-		chars: payload.code.length,
-	});
+	if (isDebugEnabled()) {
+		console.info('[LeetTrace][content] extraction result', {
+			source,
+			language: payload.language,
+			chars: payload.code.length,
+		});
+	}
 
 	return payload;
 }
@@ -111,20 +107,22 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
 	return false;
 });
 
-window.addEventListener(DEBUG_EVENT, () => {
-	void runExtraction('debug-event');
-});
+if (isDebugEnabled()) {
+	window.addEventListener(DEBUG_EVENT, () => {
+		void runExtraction('debug-event');
+	});
 
-window.addEventListener(DEBUG_GUTTER_UPDATE_EVENT, () => {
-	updateGutterAnnotations(0, [
-		{ variable: 'i', value: '2', changed: true },
-		{ variable: 'num', value: '7', changed: false },
-	]);
-});
+	window.addEventListener(DEBUG_GUTTER_UPDATE_EVENT, () => {
+		updateGutterAnnotations(0, [
+			{ variable: 'i', value: '2', changed: true },
+			{ variable: 'num', value: '7', changed: false },
+		]);
+	});
 
-window.addEventListener(DEBUG_GUTTER_CLEAR_EVENT, () => {
-	clearGutterAnnotations();
-});
+	window.addEventListener(DEBUG_GUTTER_CLEAR_EVENT, () => {
+		clearGutterAnnotations();
+	});
+}
 
 injectFAB();
 waitForMonacoEditorAndObserve();

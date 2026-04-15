@@ -64,5 +64,5 @@ chrome.runtime.onMessage.addListener((message: { type?: string }, sender, sendRe
 chrome.runtime.onInstalled.addListener(() => {
   // Re-apply on install/update in case the setting was lost
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
-  console.log('[LeetTrace] Background worker loaded');
+  console.info('[LeetTrace] Background worker loaded');
 });

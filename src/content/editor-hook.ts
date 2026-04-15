@@ -3,7 +3,7 @@ const MONACO_READY_TYPE = 'LEETTRACE_MONACO_EXTRACT_READY';
 const MONACO_ERROR_TYPE = 'LEETTRACE_MONACO_EXTRACT_ERROR';
 const DEBUG_STORAGE_KEY = 'leettrace.debug';
 
-function isDebugEnabled(): boolean {
+export function isDebugEnabled(): boolean {
   try {
     return window.localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
   } catch {
@@ -27,9 +27,25 @@ function debugLog(message: string, meta?: Record<string, unknown>): void {
 function inferLanguageFromLabel(label: string): string {
   const normalized = label.toLowerCase().replace(/\s+/g, '');
 
-  if (normalized.includes('python3') || normalized === 'python') {
-    return 'python3';
-  }
+  if (normalized.includes('python3')) return 'python3';
+  if (normalized === 'python') return 'python';
+  if (normalized.includes('c++') || normalized.includes('cpp')) return 'cpp';
+  if (normalized.includes('java') && !normalized.includes('javascript')) return 'java';
+  if (normalized.includes('javascript') || normalized === 'js') return 'javascript';
+  if (normalized.includes('typescript') || normalized === 'ts') return 'typescript';
+  if (normalized.includes('c#') || normalized.includes('csharp')) return 'csharp';
+  if (normalized === 'c') return 'c';
+  if (normalized.includes('golang') || normalized === 'go') return 'golang';
+  if (normalized.includes('rust')) return 'rust';
+  if (normalized.includes('swift')) return 'swift';
+  if (normalized.includes('kotlin')) return 'kotlin';
+  if (normalized.includes('php')) return 'php';
+  if (normalized.includes('ruby')) return 'ruby';
+  if (normalized.includes('scala')) return 'scala';
+  if (normalized.includes('perl')) return 'perl';
+  if (normalized.includes('racket')) return 'racket';
+  if (normalized.includes('erlang')) return 'erlang';
+  if (normalized.includes('elixir')) return 'elixir';
 
   return 'unsupported';
 }
@@ -143,7 +159,7 @@ function injectMonacoReadScript(requestId: string): void {
       type: MONACO_ERROR_TYPE,
       requestId,
       reason: 'bridge-load-failed',
-    }, '*');
+    }, window.location.origin);
     script.remove();
   });
 

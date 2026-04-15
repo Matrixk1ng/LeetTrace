@@ -16,7 +16,7 @@
         requestId,
         ...extra,
       },
-      '*'
+      window.location.origin
     );
   };
 

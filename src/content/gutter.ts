@@ -86,4 +86,9 @@ export function clearGutterAnnotations(): void {
   for (const overlay of overlays) {
     overlay.remove();
   }
+
+  const editorRoots = document.querySelectorAll(`.${EDITOR_ROOT_CLASS}`);
+  for (const root of editorRoots) {
+    root.classList.remove(EDITOR_ROOT_CLASS);
+  }
 }
