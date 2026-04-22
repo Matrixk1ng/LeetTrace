@@ -1,5 +1,5 @@
 // One step of execution
-interface Snapshot {
+export interface Snapshot {
   step: number;
   line: number;
   variables: Record<string, VariableState>;
@@ -7,26 +7,26 @@ interface Snapshot {
   highlights: Highlight[];
 }
 
-interface VariableState {
+export interface VariableState {
   value: any;
   type: string;       // "int", "list", "dict", "TreeNode", "ListNode", etc.
   changed: boolean;    // Did this variable change on this step?
 }
 
-interface DataStructureState {
+export interface DataStructureState {
   id: string;          // Variable name
   type: "array" | "linked_list" | "tree" | "hashmap" | "matrix";
   data: any;           // Structure-specific data
   pointers: Pointer[]; // Named index pointers (i, j, left, right, etc.)
 }
 
-interface Pointer {
+export interface Pointer {
   name: string;
   index: number;
   color: string;
 }
 
-interface Highlight {
+export interface Highlight {
   structureId: string;
   indices: number[];
   type: "compare" | "swap" | "visit" | "current" | "result";
@@ -34,7 +34,7 @@ interface Highlight {
 
 // All message types between content script, panel, and background
 // @ts-ignore
-type Message =
+export type Message =
   | { type: "EXTRACT_CODE" }
   | { type: "CODE_EXTRACTED"; payload: { code: string; language: string } }
   | { type: "EXECUTE_CODE"; payload: { code: string } }
@@ -46,15 +46,15 @@ type Message =
   | { type: "PYODIDE_READY" }
   | { type: "PYODIDE_LOADING"; payload: { progress: number } };
 
-interface GutterAnnotation {
+export interface GutterAnnotation {
   variable: string;
   value: string;
   changed: boolean;
 }
-// @ts-ignore
-type ExecutionStatus = "idle" | "loading" | "running" | "paused" | "completed" | "error";
 
-interface DetectedPattern {
+export type ExecutionStatus = "idle" | "loading" | "running" | "paused" | "completed" | "error";
+
+export interface DetectedPattern {
   type: string;        // "two_pointer", "sliding_window", "bfs", etc.
   confidence: number;  // 0.0 - 1.0
   description: string;
