@@ -33,7 +33,6 @@ export interface Highlight {
 }
 
 // All message types between content script, panel, and background
-// @ts-ignore
 export type Message =
   | { type: "EXTRACT_CODE" }
   | { type: "CODE_EXTRACTED"; payload: { code: string; language: string } }
