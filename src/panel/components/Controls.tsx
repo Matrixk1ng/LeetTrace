@@ -14,8 +14,8 @@ function ResetIcon() {
 function StepBackIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <path d="M7 7V17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <path d="M9 12L17 7V17L9 12Z" fill="currentColor" />
+      <path d="M9 7V17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M17 7L9 12L17 17V7Z" fill="currentColor" />
     </svg>
   );
 }
@@ -87,7 +87,7 @@ export default function Controls({ requestTrace }: ControlsProps) {
   const traceDisabled = state.status === 'loading' || state.status === 'running';
 
   const handleSpeedChange = (event: ChangeEvent<HTMLInputElement>) => {
-    dispatch({ type: 'SET_SPEED', payload: Number(event.target.value) });
+    dispatch({ type: 'SET_SPEED', payload: MAX_SPEED + MIN_SPEED - Number(event.target.value) });
   };
 
   return (
@@ -154,10 +154,10 @@ export default function Controls({ requestTrace }: ControlsProps) {
             min={MIN_SPEED}
             max={MAX_SPEED}
             step={50}
-            value={state.speed}
+            value={MAX_SPEED + MIN_SPEED - state.speed}
             disabled={isBusy}
             onChange={handleSpeedChange}
-            style={{ '--value': `${(state.speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)}` } as React.CSSProperties}
+            style={{ '--value': `${(MAX_SPEED - state.speed) / (MAX_SPEED - MIN_SPEED)}` } as React.CSSProperties}
             className="w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           />
         </div>
