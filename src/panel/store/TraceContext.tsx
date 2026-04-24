@@ -4,6 +4,7 @@ import {
   useReducer,
   type ReactNode,
 } from 'react';
+import { DEFAULT_SPEED } from '../../shared/constants';
 import type { Snapshot, ExecutionStatus, DetectedPattern } from '../../shared/types';
 
 /**
@@ -16,6 +17,8 @@ export interface TraceState {
   totalSteps: number;
   speed: number; // ms per step
   error: string | null;
+  errorLine: number | null;
+  loadingMessage: string | null;
   detectedPattern: DetectedPattern | null;
 }
 
@@ -55,7 +58,18 @@ export type TraceAction =
     }
   | {
       type: 'SET_ERROR';
+      payload: {
+        message: string;
+        line?: number;
+      };
+    }
+  | {
+      type: 'SET_LOADING';
       payload: string;
+    }
+  | {
+      type: 'SET_PATTERN';
+      payload: DetectedPattern | null;
     }
   | {
       type: 'CLEAR';
@@ -69,8 +83,10 @@ const initialState: TraceState = {
   snapshots: [],
   currentStep: 0,
   totalSteps: 0,
-  speed: 500,
+  speed: DEFAULT_SPEED,
   error: null,
+  errorLine: null,
+  loadingMessage: null,
   detectedPattern: null,
 };
 
@@ -84,16 +100,19 @@ function traceReducer(state: TraceState, action: TraceAction): TraceState {
       return {
         ...state,
         snapshots,
-        totalSteps: Math.max(0, snapshots.length - 1),
+        totalSteps: snapshots.length,
         currentStep: 0,
-        status: 'paused',
+        status: snapshots.length > 0 ? 'paused' : 'completed',
         error: null,
+        errorLine: null,
+        loadingMessage: null,
         detectedPattern: action.payload.pattern ?? null,
       };
     }
 
     case 'SET_STEP': {
-      const step = Math.max(0, Math.min(action.payload, state.totalSteps));
+      const maxStep = Math.max(state.totalSteps - 1, 0);
+      const step = Math.max(0, Math.min(action.payload, maxStep));
       return {
         ...state,
         currentStep: step,
@@ -101,11 +120,11 @@ function traceReducer(state: TraceState, action: TraceAction): TraceState {
     }
 
     case 'NEXT_STEP': {
-      const nextStep = Math.min(state.currentStep + 1, state.totalSteps);
+      const maxStep = Math.max(state.totalSteps - 1, 0);
+      const nextStep = Math.min(state.currentStep + 1, maxStep);
       return {
         ...state,
         currentStep: nextStep,
-        status: nextStep >= state.totalSteps ? 'completed' : state.status,
       };
     }
 
@@ -125,9 +144,15 @@ function traceReducer(state: TraceState, action: TraceAction): TraceState {
     }
 
     case 'PLAY': {
+      if (state.totalSteps === 0) {
+        return state;
+      }
+
       return {
         ...state,
         status: 'running',
+        error: null,
+        errorLine: null,
       };
     }
 
@@ -142,7 +167,7 @@ function traceReducer(state: TraceState, action: TraceAction): TraceState {
       return {
         ...state,
         currentStep: 0,
-        status: 'paused',
+        status: state.totalSteps > 0 ? 'paused' : 'idle',
       };
     }
 
@@ -150,7 +175,26 @@ function traceReducer(state: TraceState, action: TraceAction): TraceState {
       return {
         ...state,
         status: 'error',
-        error: action.payload,
+        error: action.payload.message,
+        errorLine: action.payload.line ?? null,
+        loadingMessage: null,
+      };
+    }
+
+    case 'SET_LOADING': {
+      return {
+        ...state,
+        status: 'loading',
+        loadingMessage: action.payload,
+        error: null,
+        errorLine: null,
+      };
+    }
+
+    case 'SET_PATTERN': {
+      return {
+        ...state,
+        detectedPattern: action.payload,
       };
     }
 
@@ -201,10 +245,14 @@ export function useTrace() {
 
   const { state, dispatch } = context;
   const currentSnapshot = state.snapshots[state.currentStep] ?? null;
+  const isAtStart = state.currentStep <= 0;
+  const isAtEnd = state.totalSteps === 0 || state.currentStep >= state.totalSteps - 1;
 
   return {
     state,
     dispatch,
     currentSnapshot,
+    isAtStart,
+    isAtEnd,
   };
 }
