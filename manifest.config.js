@@ -18,7 +18,7 @@ export default defineManifest({
     default_path: 'index.html',
   },
   background: {
-    service_worker: 'src/background/index.ts',
+    service_worker: 'src/background/service-worker.ts',
     type: 'module',
   },
   web_accessible_resources: [
