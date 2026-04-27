@@ -21,7 +21,7 @@ import {
 interface OffscreenMessage {
   target?: string;
   type?: string;
-  payload?: { code?: string };
+  payload?: { code?: string; examples?: string[] };
 }
 
 chrome.runtime.onMessage.addListener((message: OffscreenMessage, _sender, sendResponse) => {
@@ -31,15 +31,26 @@ chrome.runtime.onMessage.addListener((message: OffscreenMessage, _sender, sendRe
 
   if (message.type === 'EXECUTE_CODE') {
     const code = message.payload?.code ?? '';
+    const examples = message.payload?.examples ?? [];
+    console.info('[LeetTrace][offscreen] EXECUTE_CODE', {
+      codeChars: code.length,
+      examples: examples.length,
+      firstExample: examples[0] ?? null,
+    });
 
-    void executePython(code)
+    void executePython(code, examples)
       .then((result: ExecuteResult) => {
         if ('error' in result) {
+          console.warn('[LeetTrace][offscreen] execution error:', result.error);
           sendResponse({
             type: 'EXECUTION_ERROR',
             payload: { error: result.error, line: result.line },
           });
         } else {
+          console.info('[LeetTrace][offscreen] execution complete', {
+            snapshots: result.snapshots.length,
+            pattern: result.pattern?.type ?? null,
+          });
           sendResponse({
             type: 'EXECUTION_RESULT',
             payload: { snapshots: result.snapshots, pattern: result.pattern },

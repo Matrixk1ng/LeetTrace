@@ -53,7 +53,7 @@ async function resolveTargetTabId(sender: chrome.runtime.MessageSender): Promise
 }
 
 chrome.runtime.onMessage.addListener((
-  message: { type?: string; target?: string; payload?: { code?: string } },
+  message: { type?: string; target?: string; payload?: { code?: string; examples?: string[] } },
   sender: chrome.runtime.MessageSender,
   sendResponse: (response?: unknown) => void,
 ) => {
@@ -97,6 +97,7 @@ chrome.runtime.onMessage.addListener((
 
   if (message?.type === 'EXECUTE_CODE') {
     const code = message.payload?.code;
+    const examples = message.payload?.examples ?? [];
     if (!code) {
       sendResponse({ type: 'EXECUTION_ERROR', payload: { error: 'No code provided' } });
       return false;
@@ -108,7 +109,7 @@ chrome.runtime.onMessage.addListener((
         const result = await chrome.runtime.sendMessage({
           target: 'offscreen',
           type: 'EXECUTE_CODE',
-          payload: { code },
+          payload: { code, examples },
         });
         sendResponse(result);
       } catch (err) {

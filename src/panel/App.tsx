@@ -1,6 +1,7 @@
 import Controls from './components/Controls';
 import PatternBadge from './components/PatternBadge';
 import VariableInspector from './components/VariableInspector';
+import VizRouter from './components/visualizers/VizRouter';
 import { useExecution } from './hooks/useExecution';
 import { useTrace } from './store/TraceContext';
 import './App.css';
@@ -79,7 +80,10 @@ function App() {
           ) : null}
 
           {!isIdle && !isLoading && !isEmptyCompleted && !isError ? (
-            <VariableInspector />
+            <div className="flex flex-col gap-3">
+              <VizRouter />
+              <VariableInspector />
+            </div>
           ) : null}
         </section>
       </main>

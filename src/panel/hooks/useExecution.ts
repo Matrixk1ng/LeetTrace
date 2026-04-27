@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { mockExecutionResult } from '../mockData';
+import type { Snapshot, DetectedPattern } from '../../shared/types';
 import { useTrace } from '../store/TraceContext';
 
 function isRuntimeMessage(message: unknown): message is { type: string; payload?: { progress?: number; error?: string; line?: number; snapshots?: unknown[]; pattern?: unknown } } {
@@ -9,20 +9,6 @@ function isRuntimeMessage(message: unknown): message is { type: string; payload?
 export function useExecution() {
   const { state, dispatch, isAtEnd } = useTrace();
   const intervalRef = useRef<number | null>(null);
-  const mockLoadedRef = useRef(false);
-
-  useEffect(() => {
-    if (!mockLoadedRef.current) {
-      dispatch({
-        type: 'LOAD_SNAPSHOTS',
-        payload: {
-          snapshots: mockExecutionResult.snapshots,
-          pattern: mockExecutionResult.pattern,
-        },
-      });
-      mockLoadedRef.current = true;
-    }
-  }, [dispatch]);
 
   useEffect(() => {
     const handleMessage = (message: unknown) => {
@@ -95,7 +81,7 @@ export function useExecution() {
         return;
       }
 
-      let extracted: { ok: boolean; payload: { code: string; language: string } } | undefined;
+      let extracted: { ok: boolean; payload: { code: string; language: string; examples?: string[] } } | undefined;
       try {
         // Route through background so it can inject the content script if needed
         extracted = await chrome.runtime.sendMessage({ type: 'EXTRACT_CODE' }) as typeof extracted;
@@ -104,7 +90,8 @@ export function useExecution() {
       }
       const code = extracted?.payload?.code?.trim() ?? '';
       const language = extracted?.payload?.language?.toLowerCase() ?? '';
-      console.log('[LeetTrace] extracted code length:', code.length, 'language:', language);
+      const examples = extracted?.payload?.examples ?? [];
+      console.log('[LeetTrace] extracted code length:', code.length, 'language:', language, 'examples:', examples.length);
 
       if (!code) {
         dispatch({ type: 'SET_ERROR', payload: { message: 'No code found in the active editor.' } });
@@ -121,9 +108,9 @@ export function useExecution() {
       console.log('[LeetTrace] sending EXECUTE_CODE to background');
       const response = await chrome.runtime.sendMessage({
         type: 'EXECUTE_CODE',
-        payload: { code },
+        payload: { code, examples },
       }) as
-        | { type: 'EXECUTION_RESULT'; payload: { snapshots: typeof mockExecutionResult.snapshots; pattern?: typeof mockExecutionResult.pattern } }
+        | { type: 'EXECUTION_RESULT'; payload: { snapshots: Snapshot[]; pattern?: DetectedPattern } }
         | { type: 'EXECUTION_ERROR'; payload: { error: string; line?: number } }
         | undefined;
       console.log('[LeetTrace] background response:', response);

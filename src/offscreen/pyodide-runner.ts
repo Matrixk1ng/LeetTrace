@@ -37,9 +37,12 @@ async function loadPyodideLocal(): Promise<PyodideInstance> {
 const TRACER_SCRIPT = `
 import sys
 import json
+import ast
+import re
 
 _snapshots = []
 _prev_locals = {}
+_user_max_line = 10**9
 _MAX_SNAPSHOTS = ${MAX_SNAPSHOTS}
 
 def _serialize(v, _depth=0):
@@ -96,6 +99,12 @@ def _tracer(frame, event, arg):
     global _prev_locals
 
     if frame.f_code.co_filename != '<exec>':
+        return _tracer
+
+    # Suppress snapshots for the auto-injected runner stub (lines beyond the
+    # user's original code). We still keep tracing because calls into the user's
+    # method body originate from here.
+    if frame.f_lineno > _user_max_line:
         return _tracer
 
     if event == 'line':
@@ -182,15 +191,80 @@ def _deepest_user_line(tb):
     return line
 
 
-def run_traced(code_string):
-    global _snapshots, _prev_locals
+def _build_auto_runner(code_string, examples):
+    # Returns a snippet that instantiates Solution and invokes its first
+    # public method using kwargs parsed from a LeetCode example input string
+    # like "nums = [2,7,11,15], target = 9". Returns None when the user's
+    # code already calls something at the top level, when there's no
+    # Solution class, or when no usable example is available.
+    if not examples:
+        return None
+
+    try:
+        tree = ast.parse(code_string)
+    except SyntaxError:
+        return None
+
+    sol_class = None
+    has_top_level_call = False
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == 'Solution':
+            sol_class = node
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            has_top_level_call = True
+        elif isinstance(node, (ast.Assign, ast.AugAssign)) and isinstance(
+            getattr(node, 'value', None), ast.Call
+        ):
+            has_top_level_call = True
+
+    if has_top_level_call or sol_class is None:
+        return None
+
+    method_name = None
+    for node in sol_class.body:
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith('_'):
+            method_name = node.name
+            break
+
+    if method_name is None:
+        return None
+
+    for example in examples:
+        # LeetCode inputs look like "nums = [2,7,11,15], target = 9".
+        # dict(nums = [2,7,11,15], target = 9) is valid Python and gives us
+        # the kwargs dict directly — much safer than hand-splitting on commas.
+        py_example = re.sub(r'\\bnull\\b', 'None', example)
+        py_example = re.sub(r'\\btrue\\b', 'True', py_example)
+        py_example = re.sub(r'\\bfalse\\b', 'False', py_example)
+        wrapped = 'dict(' + py_example + ')'
+        try:
+            ast.parse(wrapped, mode='eval')
+        except SyntaxError:
+            continue
+        return '\\n__leettrace_sol = Solution()\\n__leettrace_sol.' + method_name + '(**' + wrapped + ')\\n'
+
+    return None
+
+
+def run_traced(code_string, examples=None):
+    global _snapshots, _prev_locals, _user_max_line
     _snapshots = []
     _prev_locals = {}
+    _user_max_line = code_string.count('\\n') + 1
+
+    runner = _build_auto_runner(code_string, examples or [])
+    full_code = code_string + (runner or '')
+
+    # Compile with filename '<exec>' so the tracer filter
+    # (frame.f_code.co_filename == '<exec>') matches; the default for exec() is
+    # '<string>', which would silently reject every line event.
+    compiled = compile(full_code, '<exec>', 'exec')
 
     namespace = _build_namespace()
     sys.settrace(_tracer)
     try:
-        exec(code_string, namespace)
+        exec(compiled, namespace)
     except Exception as exc:
         _snapshots.append({
             'step': len(_snapshots),
@@ -226,14 +300,17 @@ export async function initPyodide(): Promise<void> {
   }
 }
 
-export async function executePython(code: string): Promise<ExecuteResult> {
+export async function executePython(
+  code: string,
+  examples: string[] = [],
+): Promise<ExecuteResult> {
   if (!pyodide) {
     await initPyodide();
   }
 
   let rawJson: string;
   try {
-    const result = await Promise.race([runWithPyodide(code), timeout(MAX_EXECUTION_TIME)]);
+    const result = await Promise.race([runWithPyodide(code, examples), timeout(MAX_EXECUTION_TIME)]);
     rawJson = result as string;
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -257,9 +334,12 @@ export async function executePython(code: string): Promise<ExecuteResult> {
   };
 }
 
-async function runWithPyodide(code: string): Promise<string> {
+async function runWithPyodide(code: string, examples: string[]): Promise<string> {
   pyodide!.globals.set('__user_code', code);
-  return pyodide!.runPython('run_traced(__user_code)') as string;
+  pyodide!.globals.set('__user_examples', examples);
+  return pyodide!.runPython(
+    'run_traced(__user_code, list(__user_examples) if __user_examples is not None else [])',
+  ) as string;
 }
 
 function timeout(ms: number): Promise<never> {
