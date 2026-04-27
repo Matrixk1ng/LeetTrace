@@ -1,9 +1,12 @@
-import type { Snapshot, DataStructureState, Pointer, Highlight, DetectedPattern } from '../shared/types';
-import { PYODIDE_CDN, MAX_EXECUTION_TIME, MAX_SNAPSHOTS, POINTER_COLORS } from '../shared/constants';
+import type {
+  Snapshot,
+  DataStructureState,
+  Pointer,
+  Highlight,
+  DetectedPattern,
+} from '../shared/types';
+import { MAX_EXECUTION_TIME, MAX_SNAPSHOTS, POINTER_COLORS } from '../shared/constants';
 
-// ---------------------------------------------------------------------------
-// Pyodide globals
-// ---------------------------------------------------------------------------
 interface PyodideInstance {
   runPython: (code: string) => unknown;
   globals: {
@@ -13,34 +16,33 @@ interface PyodideInstance {
 }
 
 let pyodide: PyodideInstance | null = null;
+let initPromise: Promise<void> | null = null;
 
-// Module service workers do not support importScripts(); use a dynamic import
-// against the ESM build of Pyodide instead.  The manifest's CSP must include
-// cdn.jsdelivr.net for this to be permitted.
-async function loadPyodideFromCDN(): Promise<PyodideInstance> {
-  const mod = await import(
-    /* @vite-ignore */
-    `${PYODIDE_CDN}pyodide.mjs`
-  ) as { loadPyodide: (opts: { indexURL: string }) => Promise<PyodideInstance> };
-  return mod.loadPyodide({ indexURL: PYODIDE_CDN });
+export type ExecuteResult =
+  | { snapshots: Snapshot[]; pattern?: DetectedPattern }
+  | { error: string; line?: number };
+
+// Pyodide is shipped inside the extension at /pyodide/ — see scripts/copy-pyodide.mjs
+function pyodideUrl(file: string): string {
+  return chrome.runtime.getURL(`pyodide/${file}`);
 }
 
-// ---------------------------------------------------------------------------
-// Python tracer — embedded as a template string, loaded once into Pyodide
-// ---------------------------------------------------------------------------
+async function loadPyodideLocal(): Promise<PyodideInstance> {
+  const mod = (await import(/* @vite-ignore */ pyodideUrl('pyodide.mjs'))) as {
+    loadPyodide: (opts: { indexURL: string }) => Promise<PyodideInstance>;
+  };
+  return mod.loadPyodide({ indexURL: pyodideUrl('') });
+}
+
 const TRACER_SCRIPT = `
 import sys
 import json
-import copy
 
 _snapshots = []
 _prev_locals = {}
 _MAX_SNAPSHOTS = ${MAX_SNAPSHOTS}
 
-# ---- serialization --------------------------------------------------------
-
 def _serialize(v, _depth=0):
-    """Convert any Python value to a JSON-safe structure."""
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
 
@@ -56,7 +58,6 @@ def _serialize(v, _depth=0):
         except Exception:
             return [_serialize(x, _depth + 1) for x in v]
 
-    # Linked-list detection: has .val and .next, but not .left/.right
     if (hasattr(v, 'val') and hasattr(v, 'next')
             and not hasattr(v, 'left') and not hasattr(v, 'right')):
         nodes = []
@@ -73,14 +74,10 @@ def _serialize(v, _depth=0):
             cur = cur.next
         return {'__type': 'linked_list', 'nodes': nodes, 'has_cycle': has_cycle}
 
-    # Tree detection: has .val, .left, .right
     if hasattr(v, 'val') and hasattr(v, 'left') and hasattr(v, 'right'):
         if _depth > 10:
             return repr(v)
-        return {
-            '__type': 'tree',
-            'root': _serialize_tree_node(v, _depth),
-        }
+        return {'__type': 'tree', 'root': _serialize_tree_node(v, _depth)}
 
     return repr(v)
 
@@ -95,12 +92,9 @@ def _serialize_tree_node(node, depth=0):
     }
 
 
-# ---- tracer ---------------------------------------------------------------
-
 def _tracer(frame, event, arg):
     global _prev_locals
 
-    # Only trace user code (executed via exec → filename is '<exec>')
     if frame.f_code.co_filename != '<exec>':
         return _tracer
 
@@ -138,8 +132,6 @@ def _tracer(frame, event, arg):
     return _tracer
 
 
-# ---- public entry-point ---------------------------------------------------
-
 def run_traced(code_string):
     global _snapshots, _prev_locals
     _snapshots = []
@@ -148,11 +140,15 @@ def run_traced(code_string):
     namespace = {}
     sys.settrace(_tracer)
     try:
-        exec(code_string, namespace)  # noqa: S102
+        exec(code_string, namespace)
     except Exception as exc:
+        line = 0
+        tb = getattr(exc, '__traceback__', None)
+        if tb is not None:
+            line = tb.tb_lineno
         _snapshots.append({
             'step': len(_snapshots),
-            'line': getattr(exc, '__traceback__', None) and exc.__traceback__.tb_lineno or 0,
+            'line': line,
             'error': type(exc).__name__ + ': ' + str(exc),
             'variables': {},
         })
@@ -162,50 +158,41 @@ def run_traced(code_string):
     return json.dumps(_snapshots)
 `;
 
-// ---------------------------------------------------------------------------
-// initPyodide
-// ---------------------------------------------------------------------------
 export async function initPyodide(): Promise<void> {
   if (pyodide) return;
+  if (initPromise) return initPromise;
 
-  broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 0 } });
-  broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 30 } });
+  initPromise = (async () => {
+    broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 0 } });
+    const instance = await loadPyodideLocal();
+    broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 80 } });
+    instance.runPython(TRACER_SCRIPT);
+    pyodide = instance;
+    broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 100 } });
+    broadcastToPanel({ type: 'PYODIDE_READY' });
+  })();
 
-  pyodide = await loadPyodideFromCDN();
-
-  broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 80 } });
-
-  // Load tracer once
-  pyodide.runPython(TRACER_SCRIPT);
-
-  broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 100 } });
-  broadcastToPanel({ type: 'PYODIDE_READY' });
+  try {
+    await initPromise;
+  } catch (err) {
+    initPromise = null;
+    throw err;
+  }
 }
 
-// ---------------------------------------------------------------------------
-// executePython
-// ---------------------------------------------------------------------------
-export async function executePython(
-  code: string,
-): Promise<{ snapshots: Snapshot[]; pattern?: DetectedPattern } | { error: string; line?: number }> {
+export async function executePython(code: string): Promise<ExecuteResult> {
   if (!pyodide) {
     await initPyodide();
   }
 
-  // Execution with timeout
   let rawJson: string;
   try {
-    const result = await Promise.race([
-      runWithPyodide(code),
-      timeout(MAX_EXECUTION_TIME),
-    ]);
+    const result = await Promise.race([runWithPyodide(code), timeout(MAX_EXECUTION_TIME)]);
     rawJson = result as string;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: msg };
+    return { error: err instanceof Error ? err.message : String(err) };
   }
 
-  // Parse raw snapshots
   let rawSnapshots: RawSnapshot[];
   try {
     rawSnapshots = JSON.parse(rawJson) as RawSnapshot[];
@@ -213,25 +200,18 @@ export async function executePython(
     return { error: 'Failed to parse execution output' };
   }
 
-  // Check for Python-level error snapshot
   const lastSnap = rawSnapshots[rawSnapshots.length - 1];
-  if (lastSnap && 'error' in lastSnap) {
-    return { error: (lastSnap as { error: string; line?: number }).error, line: (lastSnap as { line?: number }).line };
+  if (lastSnap && 'error' in lastSnap && typeof lastSnap.error === 'string') {
+    return { error: lastSnap.error, line: lastSnap.line };
   }
 
-  // Post-process
-  const snapshots = rawSnapshots.map((raw) => processSnapshot(raw));
-  const pattern = detectPattern(code);
-
-  return { snapshots, pattern };
+  return {
+    snapshots: rawSnapshots.map(processSnapshot),
+    pattern: detectPattern(code),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 async function runWithPyodide(code: string): Promise<string> {
-  // Use globals.set() to avoid string interpolation issues
   pyodide!.globals.set('__user_code', code);
   return pyodide!.runPython('run_traced(__user_code)') as string;
 }
@@ -243,15 +223,11 @@ function timeout(ms: number): Promise<never> {
 }
 
 function broadcastToPanel(message: object): void {
-  // In MV3 service workers we send to all extension contexts
   chrome.runtime.sendMessage(message).catch(() => {
-    // Panel may not be open yet — ignore
+    // Panel may not be open — ignore.
   });
 }
 
-// ---------------------------------------------------------------------------
-// Raw snapshot type (from Python)
-// ---------------------------------------------------------------------------
 interface RawVariable {
   value: unknown;
   type: string;
@@ -265,22 +241,15 @@ interface RawSnapshot {
   error?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Post-processing: build full Snapshot from RawSnapshot
-// ---------------------------------------------------------------------------
 function processSnapshot(raw: RawSnapshot): Snapshot {
   const dataStructures: DataStructureState[] = [];
   const highlights: Highlight[] = [];
 
-  // First pass: identify data structures
   for (const [name, variable] of Object.entries(raw.variables)) {
     const ds = buildDataStructure(name, variable);
-    if (ds) {
-      dataStructures.push(ds);
-    }
+    if (ds) dataStructures.push(ds);
   }
 
-  // Second pass: detect pointers (int variable → valid index into an array)
   let colorIdx = 0;
   for (const [name, variable] of Object.entries(raw.variables)) {
     if (variable.type !== 'int') continue;
@@ -298,13 +267,8 @@ function processSnapshot(raw: RawSnapshot): Snapshot {
           ds.pointers.push(pointer);
           colorIdx++;
 
-          // Highlight current position when the pointer just moved
           if (variable.changed) {
-            highlights.push({
-              structureId: ds.id,
-              indices: [idx],
-              type: 'current',
-            });
+            highlights.push({ structureId: ds.id, indices: [idx], type: 'current' });
           }
         }
       }
@@ -323,35 +287,22 @@ function processSnapshot(raw: RawSnapshot): Snapshot {
 function buildDataStructure(name: string, variable: RawVariable): DataStructureState | null {
   const { value, type } = variable;
 
-  // Linked list
   if (
     value !== null &&
     typeof value === 'object' &&
     (value as { __type?: string }).__type === 'linked_list'
   ) {
-    return {
-      id: name,
-      type: 'linked_list',
-      data: value,
-      pointers: [],
-    };
+    return { id: name, type: 'linked_list', data: value, pointers: [] };
   }
 
-  // Tree
   if (
     value !== null &&
     typeof value === 'object' &&
     (value as { __type?: string }).__type === 'tree'
   ) {
-    return {
-      id: name,
-      type: 'tree',
-      data: value,
-      pointers: [],
-    };
+    return { id: name, type: 'tree', data: value, pointers: [] };
   }
 
-  // Array or Matrix
   if (type === 'list' && Array.isArray(value)) {
     const isMatrix =
       value.length > 0 &&
@@ -366,27 +317,17 @@ function buildDataStructure(name: string, variable: RawVariable): DataStructureS
     };
   }
 
-  // Hashmap
   if (type === 'dict') {
-    return {
-      id: name,
-      type: 'hashmap',
-      data: value,
-      pointers: [],
-    };
+    return { id: name, type: 'hashmap', data: value, pointers: [] };
   }
 
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Pattern detection
-// ---------------------------------------------------------------------------
 export function detectPattern(code: string): DetectedPattern | undefined {
   const lines = code.split('\n');
   const full = code;
 
-  // Binary Search
   if (
     /while\s+\w*lo\w*\s*<=?\s*\w*hi\w*/i.test(full) ||
     /while\s+\w*left\w*\s*<=?\s*\w*right\w*/i.test(full) ||
@@ -395,11 +336,11 @@ export function detectPattern(code: string): DetectedPattern | undefined {
     return {
       type: 'binary_search',
       confidence: 0.85,
-      description: 'Binary search: repeatedly halves the search space using two boundary pointers and a midpoint.',
+      description:
+        'Binary search: repeatedly halves the search space using two boundary pointers and a midpoint.',
     };
   }
 
-  // BFS
   if (/\bdeque\b|\bqueue\b/i.test(full) && /\bappend\b|\bpopleft\b|\bappendleft\b/i.test(full)) {
     return {
       type: 'bfs',
@@ -408,7 +349,6 @@ export function detectPattern(code: string): DetectedPattern | undefined {
     };
   }
 
-  // DFS (recursive + visited set)
   const hasRecursion = lines.some((l) => {
     const fnMatch = l.match(/def\s+(\w+)\s*\(/);
     if (fnMatch) {
@@ -422,11 +362,11 @@ export function detectPattern(code: string): DetectedPattern | undefined {
     return {
       type: 'dfs',
       confidence: 0.8,
-      description: 'Depth-first search: explores paths recursively, using a visited set to avoid revisiting nodes.',
+      description:
+        'Depth-first search: explores paths recursively, using a visited set to avoid revisiting nodes.',
     };
   }
 
-  // Backtracking
   if (
     hasRecursion &&
     /\bappend\b/.test(full) &&
@@ -436,20 +376,20 @@ export function detectPattern(code: string): DetectedPattern | undefined {
     return {
       type: 'backtracking',
       confidence: 0.75,
-      description: 'Backtracking: recursively builds candidates and abandons those that fail the constraints.',
+      description:
+        'Backtracking: recursively builds candidates and abandons those that fail the constraints.',
     };
   }
 
-  // Dynamic Programming
   if (/@cache|@lru_cache/i.test(full) || /\[0\]\s*\*/.test(full) || /dp\s*=\s*\[/.test(full)) {
     return {
       type: 'dynamic_programming',
       confidence: 0.8,
-      description: 'Dynamic programming: breaks the problem into overlapping subproblems and memoizes results.',
+      description:
+        'Dynamic programming: breaks the problem into overlapping subproblems and memoizes results.',
     };
   }
 
-  // Two Pointer
   {
     const twoPointerPatterns = [
       /while\s+\w*left\w*\s*<\s*\w*right\w*/i,
@@ -460,7 +400,8 @@ export function detectPattern(code: string): DetectedPattern | undefined {
       return {
         type: 'two_pointer',
         confidence: 0.8,
-        description: 'Two pointer: uses two indices moving toward each other to efficiently process sorted data.',
+        description:
+          'Two pointer: uses two indices moving toward each other to efficiently process sorted data.',
       };
     }
   }

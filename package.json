@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/copy-pyodide.mjs && vite",
+    "prebuild": "node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -12,6 +13,7 @@
   "dependencies": {
     "@crxjs/vite-plugin": "^2.4.0",
     "autoprefixer": "^10.4.27",
+    "pyodide": "^0.26.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
