@@ -129,3 +129,4 @@ chrome.runtime.onInstalled.addListener(async () => {
         console.error('[LeetTrace] Pyodide pre-warm failed:', err);
     }
 });
+
