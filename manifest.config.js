@@ -5,7 +5,10 @@ export default defineManifest({
   name: 'LeetTrace',
   version: '0.1.0',
   permissions: ['sidePanel', 'activeTab', 'tabs', 'storage'],
-  host_permissions: ['https://leetcode.com/*'],
+  host_permissions: ['https://leetcode.com/*', 'https://cdn.jsdelivr.net/*'],
+  content_security_policy: {
+    extension_pages: "script-src 'self' https://cdn.jsdelivr.net; object-src 'self'",
+  },
   content_scripts: [
     {
       matches: ['https://leetcode.com/problems/*'],

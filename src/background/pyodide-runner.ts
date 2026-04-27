@@ -4,8 +4,6 @@ import { PYODIDE_CDN, MAX_EXECUTION_TIME, MAX_SNAPSHOTS, POINTER_COLORS } from '
 // ---------------------------------------------------------------------------
 // Pyodide globals
 // ---------------------------------------------------------------------------
-declare const loadPyodide: (opts: { indexURL: string }) => Promise<PyodideInstance>;
-
 interface PyodideInstance {
   runPython: (code: string) => unknown;
   globals: {
@@ -15,6 +13,17 @@ interface PyodideInstance {
 }
 
 let pyodide: PyodideInstance | null = null;
+
+// Module service workers do not support importScripts(); use a dynamic import
+// against the ESM build of Pyodide instead.  The manifest's CSP must include
+// cdn.jsdelivr.net for this to be permitted.
+async function loadPyodideFromCDN(): Promise<PyodideInstance> {
+  const mod = await import(
+    /* @vite-ignore */
+    `${PYODIDE_CDN}pyodide.mjs`
+  ) as { loadPyodide: (opts: { indexURL: string }) => Promise<PyodideInstance> };
+  return mod.loadPyodide({ indexURL: PYODIDE_CDN });
+}
 
 // ---------------------------------------------------------------------------
 // Python tracer — embedded as a template string, loaded once into Pyodide
@@ -157,21 +166,12 @@ def run_traced(code_string):
 // initPyodide
 // ---------------------------------------------------------------------------
 export async function initPyodide(): Promise<void> {
-  // Broadcast loading start
+  if (pyodide) return;
+
   broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 0 } });
-
-  // Dynamically inject the Pyodide loader script into the service-worker scope
-  // (importScripts is the only way to load external scripts in a SW)
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (self as any).importScripts(`${PYODIDE_CDN}pyodide.js`);
-  } catch {
-    // Already loaded — ignore "already defined" errors
-  }
-
   broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 30 } });
 
-  pyodide = await loadPyodide({ indexURL: PYODIDE_CDN });
+  pyodide = await loadPyodideFromCDN();
 
   broadcastToPanel({ type: 'PYODIDE_LOADING', payload: { progress: 80 } });
 
