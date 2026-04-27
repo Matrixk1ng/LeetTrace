@@ -6,6 +6,12 @@ export default defineManifest({
   version: '0.1.0',
   permissions: ['sidePanel', 'activeTab', 'tabs', 'storage', 'offscreen'],
   host_permissions: ['https://leetcode.com/*'],
+  // Pyodide uses WebAssembly.instantiateStreaming, which requires
+  // 'wasm-unsafe-eval' in script-src. This token is allowed by Chrome MV3
+  // (unlike remote origins); no other deviations from the default CSP.
+  content_security_policy: {
+    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+  },
   content_scripts: [
     {
       matches: ['https://leetcode.com/problems/*'],

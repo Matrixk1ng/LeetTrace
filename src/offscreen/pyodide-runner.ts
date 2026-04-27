@@ -132,23 +132,69 @@ def _tracer(frame, event, arg):
     return _tracer
 
 
+def _build_namespace():
+    # LeetCode prepends these imports invisibly. Replicate them so user code
+    # that uses List[int], Optional[ListNode], etc. works without modification.
+    from typing import List, Dict, Set, Tuple, Optional, Any, Union, Deque
+    from collections import defaultdict, deque, Counter, OrderedDict
+    import math
+    import heapq
+    import bisect
+    import functools
+    import itertools
+
+    class ListNode:
+        def __init__(self, val=0, next=None):
+            self.val = val
+            self.next = next
+
+    class TreeNode:
+        def __init__(self, val=0, left=None, right=None):
+            self.val = val
+            self.left = left
+            self.right = right
+
+    return {
+        'List': List, 'Dict': Dict, 'Set': Set, 'Tuple': Tuple,
+        'Optional': Optional, 'Any': Any, 'Union': Union, 'Deque': Deque,
+        'defaultdict': defaultdict, 'deque': deque,
+        'Counter': Counter, 'OrderedDict': OrderedDict,
+        'math': math, 'heapq': heapq, 'bisect': bisect,
+        'functools': functools, 'itertools': itertools,
+        'ListNode': ListNode, 'TreeNode': TreeNode,
+    }
+
+
+def _deepest_user_line(tb):
+    # Walk to the deepest traceback frame inside user code ('<exec>'); fall
+    # back to the deepest frame overall, then to 0.
+    line = 0
+    cur = tb
+    while cur is not None:
+        if cur.tb_frame.f_code.co_filename == '<exec>':
+            line = cur.tb_lineno
+        cur = cur.tb_next
+    if line == 0 and tb is not None:
+        cur = tb
+        while cur.tb_next is not None:
+            cur = cur.tb_next
+        line = cur.tb_lineno
+    return line
+
+
 def run_traced(code_string):
     global _snapshots, _prev_locals
     _snapshots = []
     _prev_locals = {}
 
-    namespace = {}
+    namespace = _build_namespace()
     sys.settrace(_tracer)
     try:
         exec(code_string, namespace)
     except Exception as exc:
-        line = 0
-        tb = getattr(exc, '__traceback__', None)
-        if tb is not None:
-            line = tb.tb_lineno
         _snapshots.append({
             'step': len(_snapshots),
-            'line': line,
+            'line': _deepest_user_line(getattr(exc, '__traceback__', None)),
             'error': type(exc).__name__ + ': ' + str(exc),
             'variables': {},
         })
