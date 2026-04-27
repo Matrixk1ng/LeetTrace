@@ -1,28 +1,45 @@
 import { useEffect, useRef } from 'react';
-import { mockExecutionResult } from '../mockData';
+import type { Snapshot, DetectedPattern, GutterAnnotation } from '../../shared/types';
 import { useTrace } from '../store/TraceContext';
 
 function isRuntimeMessage(message: unknown): message is { type: string; payload?: { progress?: number; error?: string; line?: number; snapshots?: unknown[]; pattern?: unknown } } {
   return typeof message === 'object' && message !== null && 'type' in message;
 }
 
-export function useExecution() {
-  const { state, dispatch, isAtEnd } = useTrace();
-  const intervalRef = useRef<number | null>(null);
-  const mockLoadedRef = useRef(false);
+const MAX_GUTTER_VARS = 4;
 
-  useEffect(() => {
-    if (!mockLoadedRef.current) {
-      dispatch({
-        type: 'LOAD_SNAPSHOTS',
-        payload: {
-          snapshots: mockExecutionResult.snapshots,
-          pattern: mockExecutionResult.pattern,
-        },
-      });
-      mockLoadedRef.current = true;
-    }
-  }, [dispatch]);
+function buildGutterAnnotations(snapshot: Snapshot | null): GutterAnnotation[] {
+  if (!snapshot) return [];
+  const entries = Object.entries(snapshot.variables);
+  // Show changed variables first, then a few stable ones, capped so the badge fits.
+  entries.sort(([, a], [, b]) => Number(b.changed) - Number(a.changed));
+  return entries.slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
+    variable,
+    value: formatGutterValue(v.value),
+    changed: v.changed,
+  }));
+}
+
+function formatGutterValue(value: unknown): string {
+  if (value === null) return 'None';
+  if (value === true) return 'True';
+  if (value === false) return 'False';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    const text = JSON.stringify(value);
+    return text.length > 24 ? text.slice(0, 23) + '…' : text;
+  }
+  if (typeof value === 'object') {
+    const text = JSON.stringify(value);
+    return text.length > 24 ? text.slice(0, 23) + '…' : text;
+  }
+  return String(value);
+}
+
+export function useExecution() {
+  const { state, dispatch, isAtEnd, currentSnapshot } = useTrace();
+  const intervalRef = useRef<number | null>(null);
+  const leetcodeTabIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleMessage = (message: unknown) => {
@@ -47,6 +64,30 @@ export function useExecution() {
       chrome.runtime.onMessage.removeListener(handleMessage);
     };
   }, [dispatch, state.status]);
+
+  // Mirror the active step into the LeetCode editor: highlight the current
+  // line and show inline variable badges. Clear when there's nothing to show.
+  useEffect(() => {
+    const tabId = leetcodeTabIdRef.current;
+    if (typeof tabId !== 'number') return;
+
+    if (state.status === 'idle' || state.status === 'error' || state.totalSteps === 0) {
+      void chrome.tabs.sendMessage(tabId, { type: 'CLEAR_GUTTER' }).catch(() => {});
+      return;
+    }
+
+    if (!currentSnapshot) return;
+    // Python lines are 1-indexed; Monaco view-line indices are 0-indexed.
+    const editorLine = Math.max(0, currentSnapshot.line - 1);
+    const annotations = buildGutterAnnotations(currentSnapshot);
+
+    void chrome.tabs
+      .sendMessage(tabId, {
+        type: 'UPDATE_GUTTER',
+        payload: { line: editorLine, annotations },
+      })
+      .catch(() => {});
+  }, [currentSnapshot, state.status, state.totalSteps]);
 
   useEffect(() => {
     if (state.status !== 'running') {
@@ -95,7 +136,9 @@ export function useExecution() {
         return;
       }
 
-      let extracted: { ok: boolean; payload: { code: string; language: string } } | undefined;
+      leetcodeTabIdRef.current = tabId;
+
+      let extracted: { ok: boolean; payload: { code: string; language: string; examples?: string[] } } | undefined;
       try {
         // Route through background so it can inject the content script if needed
         extracted = await chrome.runtime.sendMessage({ type: 'EXTRACT_CODE' }) as typeof extracted;
@@ -104,7 +147,8 @@ export function useExecution() {
       }
       const code = extracted?.payload?.code?.trim() ?? '';
       const language = extracted?.payload?.language?.toLowerCase() ?? '';
-      console.log('[LeetTrace] extracted code length:', code.length, 'language:', language);
+      const examples = extracted?.payload?.examples ?? [];
+      console.log('[LeetTrace] extracted code length:', code.length, 'language:', language, 'examples:', examples.length);
 
       if (!code) {
         dispatch({ type: 'SET_ERROR', payload: { message: 'No code found in the active editor.' } });
@@ -121,9 +165,9 @@ export function useExecution() {
       console.log('[LeetTrace] sending EXECUTE_CODE to background');
       const response = await chrome.runtime.sendMessage({
         type: 'EXECUTE_CODE',
-        payload: { code },
+        payload: { code, examples },
       }) as
-        | { type: 'EXECUTION_RESULT'; payload: { snapshots: typeof mockExecutionResult.snapshots; pattern?: typeof mockExecutionResult.pattern } }
+        | { type: 'EXECUTION_RESULT'; payload: { snapshots: Snapshot[]; pattern?: DetectedPattern } }
         | { type: 'EXECUTION_ERROR'; payload: { error: string; line?: number } }
         | undefined;
       console.log('[LeetTrace] background response:', response);

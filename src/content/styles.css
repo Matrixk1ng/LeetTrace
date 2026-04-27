@@ -42,6 +42,17 @@
   z-index: 18;
 }
 
+.leettrace-line-highlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(56, 189, 248, 0.16);
+  border-left: 3px solid #38bdf8;
+  pointer-events: none;
+  z-index: 10;
+  transition: top 0.18s ease, height 0.18s ease;
+}
+
 .leettrace-gutter-badge {
   position: absolute;
   right: 8px;

@@ -221,7 +221,40 @@ function extractFromDom(): string {
   return code;
 }
 
-export async function extractCode(): Promise<{ code: string; language: string }> {
+function extractExampleInputs(): string[] {
+  const inputs: string[] = [];
+  const seen = new Set<string>();
+
+  // Match "Input: ..." up to the next Output:/Explanation:/Example label.
+  const inputRegex = /Input:\s*([\s\S]+?)(?=\s*(?:Output:|Explanation:|Example\s*\d|Constraints?:|$))/gi;
+
+  // Prefer <pre> blocks (classic LeetCode example layout); fall back to any element
+  // mentioning Input: in case the problem description uses paragraphs instead.
+  const candidates: Element[] = [
+    ...Array.from(document.querySelectorAll('pre')),
+    ...Array.from(document.querySelectorAll('div, p')).filter((el) => {
+      const text = el.textContent ?? '';
+      return text.includes('Input:') && text.length < 4000;
+    }),
+  ];
+
+  for (const el of candidates) {
+    const text = (el.textContent ?? '').replace(/ /g, ' ');
+    inputRegex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = inputRegex.exec(text)) !== null) {
+      const cleaned = match[1].trim().replace(/\s+/g, ' ');
+      if (!cleaned || seen.has(cleaned)) continue;
+      seen.add(cleaned);
+      inputs.push(cleaned);
+    }
+    if (inputs.length > 0) break;
+  }
+
+  return inputs;
+}
+
+export async function extractCode(): Promise<{ code: string; language: string; examples: string[] }> {
   const language = detectLeetCodeLanguage();
 
   if (language === 'unsupported') {
@@ -229,20 +262,24 @@ export async function extractCode(): Promise<{ code: string; language: string }>
     return {
       code: '',
       language,
+      examples: [],
     };
   }
 
   const monacoCode = await extractFromMonacoApi();
   const useMonaco = typeof monacoCode === 'string' && monacoCode.length > 0;
   const code = useMonaco ? monacoCode : extractFromDom();
+  const examples = extractExampleInputs();
 
   debugLog(useMonaco ? 'Using Monaco API result' : 'Using DOM fallback result', {
     language,
     chars: code.length,
+    examples: examples.length,
   });
 
   return {
     code,
     language,
+    examples,
   };
 }

@@ -3,6 +3,7 @@ const GUTTER_ITEM_CLASS = 'leettrace-gutter-item';
 const GUTTER_OVERLAY_CLASS = 'leettrace-gutter-overlay';
 const GUTTER_ITEM_CHANGED_CLASS = 'leettrace-gutter-item-changed';
 const GUTTER_ITEM_UNCHANGED_CLASS = 'leettrace-gutter-item-unchanged';
+const GUTTER_LINE_HIGHLIGHT_CLASS = 'leettrace-line-highlight';
 const EDITOR_ROOT_CLASS = 'leettrace-editor-root';
 
 export interface GutterAnnotation {
@@ -38,14 +39,23 @@ function getOrCreateOverlayHost(targetLine: HTMLElement): HTMLElement | null {
   return overlay;
 }
 
-export function updateGutterAnnotations(line: number, annotations: GutterAnnotation[]): void {
-  if (!Number.isInteger(line) || line < 0 || annotations.length === 0) {
+function findLineElement(line: number): HTMLElement | null {
+  // Monaco renders only visible .view-line nodes and they're not in source order
+  // in the DOM — they use absolute top positions. Sort by top so index === line.
+  const lineElements = (Array.from(document.querySelectorAll('.view-lines .view-line')) as HTMLElement[])
+    .map((el) => ({ el, top: parseFloat(el.style.top || '0') }))
+    .sort((a, b) => a.top - b.top);
+
+  return lineElements[line]?.el ?? null;
+}
+
+export function setCurrentLineHighlight(line: number): void {
+  if (!Number.isInteger(line) || line < 0) {
+    clearCurrentLineHighlight();
     return;
   }
 
-  const lineElements = Array.from(document.querySelectorAll('.view-lines .view-line'));
-  const targetLine = lineElements[line] as HTMLElement | undefined;
-
+  const targetLine = findLineElement(line);
   if (!targetLine) {
     return;
   }
@@ -55,10 +65,50 @@ export function updateGutterAnnotations(line: number, annotations: GutterAnnotat
     return;
   }
 
-  const existing = overlay.querySelector(`.${GUTTER_BADGE_CLASS}[data-line-index="${line}"]`);
-  if (existing) {
-    existing.remove();
+  let highlight = overlay.querySelector(`.${GUTTER_LINE_HIGHLIGHT_CLASS}`) as HTMLElement | null;
+  if (!highlight) {
+    highlight = document.createElement('div');
+    highlight.className = GUTTER_LINE_HIGHLIGHT_CLASS;
+    overlay.appendChild(highlight);
   }
+
+  const editorRect = overlay.getBoundingClientRect();
+  const lineRect = targetLine.getBoundingClientRect();
+  highlight.style.top = `${lineRect.top - editorRect.top}px`;
+  highlight.style.height = `${lineRect.height}px`;
+}
+
+export function clearCurrentLineHighlight(): void {
+  const highlights = document.querySelectorAll(`.${GUTTER_LINE_HIGHLIGHT_CLASS}`);
+  for (const h of highlights) {
+    h.remove();
+  }
+}
+
+export function updateGutterAnnotations(line: number, annotations: GutterAnnotation[]): void {
+  if (!Number.isInteger(line) || line < 0) {
+    return;
+  }
+
+  setCurrentLineHighlight(line);
+
+  if (annotations.length === 0) {
+    return;
+  }
+
+  const targetLine = findLineElement(line);
+  if (!targetLine) {
+    return;
+  }
+
+  const overlay = getOrCreateOverlayHost(targetLine);
+  if (!overlay) {
+    return;
+  }
+
+  // Only one badge at a time — replace whatever was there.
+  const existing = overlay.querySelectorAll(`.${GUTTER_BADGE_CLASS}`);
+  for (const e of existing) e.remove();
 
   const badge = document.createElement('span');
   badge.className = GUTTER_BADGE_CLASS;
@@ -77,6 +127,8 @@ export function updateGutterAnnotations(line: number, annotations: GutterAnnotat
 }
 
 export function clearGutterAnnotations(): void {
+  clearCurrentLineHighlight();
+
   const existingBadges = document.querySelectorAll(`.${GUTTER_BADGE_CLASS}`);
   for (const badge of existingBadges) {
     badge.remove();

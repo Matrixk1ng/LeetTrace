@@ -19,7 +19,7 @@ interface RuntimeMessage {
 	};
 }
 
-async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<{ code: string; language: string }> {
+async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<{ code: string; language: string; examples: string[] }> {
 	const payload = await extractCode();
 
 	if (isDebugEnabled()) {
@@ -27,6 +27,7 @@ async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise
 			source,
 			language: payload.language,
 			chars: payload.code.length,
+			examples: payload.examples.length,
 		});
 	}
 
@@ -81,7 +82,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
 				sendResponse({ ok: true, payload });
 			})
 			.catch((error: unknown) => {
-				const fallbackPayload = { code: '', language: 'unsupported' };
+				const fallbackPayload = { code: '', language: 'unsupported', examples: [] };
 				console.warn('[LeetTrace][content] EXTRACT_CODE failed', error);
 				sendResponse({ ok: false, payload: fallbackPayload });
 			});
