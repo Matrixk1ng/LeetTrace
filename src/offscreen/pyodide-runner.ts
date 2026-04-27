@@ -45,6 +45,17 @@ _prev_locals = {}
 _user_max_line = 10**9
 _MAX_SNAPSHOTS = ${MAX_SNAPSHOTS}
 
+# Names that _build_namespace() injects (typing helpers, ListNode/TreeNode,
+# stdlib modules). These are not user variables, so they should never appear
+# as snapshot variables or count toward "is this snapshot interesting?".
+_BASELINE_NAMES = frozenset({
+    'List', 'Dict', 'Set', 'Tuple', 'Optional', 'Any', 'Union', 'Deque',
+    'defaultdict', 'deque', 'Counter', 'OrderedDict',
+    'math', 'heapq', 'bisect', 'functools', 'itertools',
+    'ListNode', 'TreeNode', 'Solution',
+    '__leettrace_sol',
+})
+
 def _serialize(v, _depth=0):
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
@@ -107,14 +118,14 @@ def _tracer(frame, event, arg):
     if frame.f_lineno > _user_max_line:
         return _tracer
 
-    if event == 'line':
+    if event in ('line', 'return'):
         if len(_snapshots) >= _MAX_SNAPSHOTS:
             sys.settrace(None)
             return None
 
         current_locals = {}
         for k, v in frame.f_locals.items():
-            if k.startswith('_'):
+            if k.startswith('_') or k in _BASELINE_NAMES:
                 continue
             try:
                 serialized = _serialize(v)
@@ -130,13 +141,45 @@ def _tracer(frame, event, arg):
                     'changed': True,
                 }
 
+        is_module_frame = frame.f_code.co_name == '<module>'
+
+        if event == 'return':
+            # Surface the returned value as a synthetic 'return' variable so the
+            # user can see the function's result on the final snapshot. Skip
+            # returns from the module frame (those are the runner-stub epilogue).
+            if not is_module_frame and arg is not None:
+                try:
+                    serialized = _serialize(arg)
+                    current_locals['return'] = {
+                        'value': serialized,
+                        'type': type(arg).__name__,
+                        'changed': True,
+                    }
+                except Exception:
+                    current_locals['return'] = {
+                        'value': repr(arg),
+                        'type': type(arg).__name__,
+                        'changed': True,
+                    }
+            elif is_module_frame:
+                return _tracer
+
+        # Skip class-definition / runner-stub line events that have no user
+        # variables — these would otherwise show up as empty "junk" steps before
+        # the real method body executes.
+        if is_module_frame and not current_locals:
+            return _tracer
+
         _snapshots.append({
             'step': len(_snapshots),
             'line': frame.f_lineno,
             'variables': current_locals,
         })
 
-        _prev_locals = {k: repr(v) for k, v in frame.f_locals.items() if not k.startswith('_')}
+        _prev_locals = {
+            k: repr(v) for k, v in frame.f_locals.items()
+            if not k.startswith('_') and k not in _BASELINE_NAMES
+        }
 
     return _tracer
 

@@ -1,14 +1,45 @@
 import { useEffect, useRef } from 'react';
-import type { Snapshot, DetectedPattern } from '../../shared/types';
+import type { Snapshot, DetectedPattern, GutterAnnotation } from '../../shared/types';
 import { useTrace } from '../store/TraceContext';
 
 function isRuntimeMessage(message: unknown): message is { type: string; payload?: { progress?: number; error?: string; line?: number; snapshots?: unknown[]; pattern?: unknown } } {
   return typeof message === 'object' && message !== null && 'type' in message;
 }
 
+const MAX_GUTTER_VARS = 4;
+
+function buildGutterAnnotations(snapshot: Snapshot | null): GutterAnnotation[] {
+  if (!snapshot) return [];
+  const entries = Object.entries(snapshot.variables);
+  // Show changed variables first, then a few stable ones, capped so the badge fits.
+  entries.sort(([, a], [, b]) => Number(b.changed) - Number(a.changed));
+  return entries.slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
+    variable,
+    value: formatGutterValue(v.value),
+    changed: v.changed,
+  }));
+}
+
+function formatGutterValue(value: unknown): string {
+  if (value === null) return 'None';
+  if (value === true) return 'True';
+  if (value === false) return 'False';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    const text = JSON.stringify(value);
+    return text.length > 24 ? text.slice(0, 23) + '…' : text;
+  }
+  if (typeof value === 'object') {
+    const text = JSON.stringify(value);
+    return text.length > 24 ? text.slice(0, 23) + '…' : text;
+  }
+  return String(value);
+}
+
 export function useExecution() {
-  const { state, dispatch, isAtEnd } = useTrace();
+  const { state, dispatch, isAtEnd, currentSnapshot } = useTrace();
   const intervalRef = useRef<number | null>(null);
+  const leetcodeTabIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleMessage = (message: unknown) => {
@@ -33,6 +64,30 @@ export function useExecution() {
       chrome.runtime.onMessage.removeListener(handleMessage);
     };
   }, [dispatch, state.status]);
+
+  // Mirror the active step into the LeetCode editor: highlight the current
+  // line and show inline variable badges. Clear when there's nothing to show.
+  useEffect(() => {
+    const tabId = leetcodeTabIdRef.current;
+    if (typeof tabId !== 'number') return;
+
+    if (state.status === 'idle' || state.status === 'error' || state.totalSteps === 0) {
+      void chrome.tabs.sendMessage(tabId, { type: 'CLEAR_GUTTER' }).catch(() => {});
+      return;
+    }
+
+    if (!currentSnapshot) return;
+    // Python lines are 1-indexed; Monaco view-line indices are 0-indexed.
+    const editorLine = Math.max(0, currentSnapshot.line - 1);
+    const annotations = buildGutterAnnotations(currentSnapshot);
+
+    void chrome.tabs
+      .sendMessage(tabId, {
+        type: 'UPDATE_GUTTER',
+        payload: { line: editorLine, annotations },
+      })
+      .catch(() => {});
+  }, [currentSnapshot, state.status, state.totalSteps]);
 
   useEffect(() => {
     if (state.status !== 'running') {
@@ -80,6 +135,8 @@ export function useExecution() {
         dispatch({ type: 'SET_ERROR', payload: { message: 'Unable to find the active tab.' } });
         return;
       }
+
+      leetcodeTabIdRef.current = tabId;
 
       let extracted: { ok: boolean; payload: { code: string; language: string; examples?: string[] } } | undefined;
       try {
