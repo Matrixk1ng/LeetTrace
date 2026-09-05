@@ -1,6 +1,6 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** Draft v1 · 2026-09-04
+**Status:** v1.1 · 2026-09-04 (M1 landed; §5, §6 and §10 reflect what shipped)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
@@ -138,6 +138,14 @@ interface Snapshot {
   stdout?: string;                 // print() output emitted on this step
 }
 
+interface TraceResult {
+  snapshots: Snapshot[];
+  pattern?: DetectedPattern;
+  truncated?: boolean;             // a budget cut the run short
+  limit?: 'events' | 'snapshots' | 'time';
+  returnValue?: unknown;           // decoded back to LeetCode's own encoding
+}
+
 type StructureKind =
   | 'array' | 'string' | 'matrix' | 'hashmap' | 'set'
   | 'linked_list' | 'tree' | 'stack' | 'queue' | 'heap' | 'graph';
@@ -152,10 +160,11 @@ Messages get versioned in one union in `shared/types.ts`, all four contexts impo
 
 ## 5. Execution engine hardening (fixes B1, B10)
 
-1. **Worker host:** offscreen doc spawns `pyodide-worker.ts` (module worker). All of today's `pyodide-runner.ts` moves in; offscreen `main.ts` becomes a thin message bridge with a request queue (one execution at a time).
-2. **Interrupts:** if `crossOriginIsolated` allows SharedArrayBuffer in the offscreen context, use `pyodide.setInterruptBuffer`; on timeout set `buf[0] = 2` → `KeyboardInterrupt` inside Python. Regardless, keep a hard fallback: `worker.terminate()` after `MAX_EXECUTION_TIME + 2s`, respawn, and report "Execution timed out".
-3. **Budget inside the tracer:** the tracer counts *events* (not just snapshots) and raises `LeetTraceLimitError` at, say, 200k events, so `sys.settrace(None)`-then-run-forever can't happen. Snapshot cap stays at `MAX_SNAPSHOTS` with an explicit `truncated: true` flag surfaced in the UI ("showing first 5000 steps").
+1. **Worker host:** offscreen doc spawns `pyodide-worker.ts` (module worker). All of `pyodide-runner.ts` moved in; offscreen `main.ts` is a thin message bridge and `pyodide-host.ts` owns the worker lifetime with a request queue (one execution at a time). The worker never touches `chrome.*` (not reliably present in dedicated workers) — the Pyodide URL is handed in on `INIT` and load progress is relayed by the document.
+2. **Interrupts:** `pyodide.setInterruptBuffer` needs a SharedArrayBuffer, which needs cross-origin isolation. **Offscreen documents are not cross-origin isolated**, so in practice the buffer is unavailable and the fallback is the live path: `worker.terminate()` at `MAX_EXECUTION_TIME`, respawn, report "Execution timed out" (~2-4s Pyodide reload penalty, per §11). The buffer is still feature-detected and used when present, with `worker.terminate()` following `WORKER_TERMINATE_GRACE` later if Python hasn't unwound. Forcing isolation via manifest COOP/COEP headers was considered and rejected: it risks breaking Pyodide's own wasm fetches and can't be verified without Chrome.
+3. **Budget inside the tracer:** the tracer counts *events* (not just snapshots) and raises `LeetTraceLimitError` (a `BaseException`, so user `except Exception` blocks can't swallow it) at 200k events. Hitting `MAX_SNAPSHOTS` raises it too, rather than calling `sys.settrace(None)` and letting the code run on untraced — that was the actual B1 hang. Both set `truncated: true`, and `limit` (`'events' | 'snapshots' | 'time'`) says which fired so the UI can word the notice correctly. Note the ordering in practice: with the runner stub gone (see §6) nearly every event produces a snapshot, so a tight loop trips the snapshot cap first; the event cap backstops events that don't.
 4. **Warm-up:** offscreen doc calls `initPyodide()` on load (drops the racy WARMUP message, B15). SW only ensures the document exists.
+5. **Compile filename:** user code is compiled under `<leettrace-user-code>`, **not** `<exec>` — Pyodide's own `runPython()` uses `<exec>`, which would make the tracer's frames indistinguishable from the user's in the browser (and only there). `tests/tracer/test_pyodide_parity.py` pins this.
 
 ---
 
@@ -164,13 +173,14 @@ Messages get versioned in one union in `shared/types.ts`, all four contexts impo
 In `_build_auto_runner`, after choosing `method_name`:
 
 1. Parse the method's **annotations** from the AST: `Optional[ListNode]`, `List[TreeNode]`, `ListNode`, `TreeNode`, `Optional[TreeNode]`, `List[List[int]]`, etc. (string comparison on the unparsed annotation is fine).
-2. Generate a runner stub that wraps each kwarg through a converter before the call:
-   - `_to_list_node(values)` → chained `ListNode`s (also `List[ListNode]` → map).
+2. **No runner stub is generated.** The original plan appended runner source to the user's code; instead `exec()` defines the module and the tracer then calls `Solution().<method>(**args)` directly from Python, with arguments built on the tracer side. Strictly better: no synthetic lines exist at all, so nothing can leak into snapshots or tracebacks, and the `_user_max_line` suppression this section used to depend on is no longer load-bearing.
+3. Each argument is passed through a converter chosen by its annotation:
+   - `_to_list_node(values)` → chained `ListNode`s (also `List[Optional[ListNode]]` → map).
    - `_to_tree_node(values)` → level-order build with `None` gaps (LeetCode's standard encoding).
-   - Special example keys: `pos` (cycle index — connect tail for cycle problems), `n` alongside `head`, etc. handled case-by-case; when `pos >= 0`, link the cycle so `has_cycle` serialization shows it.
-3. Convert the **return value** symmetrically for the final snapshot (`ListNode` → list, `TreeNode` → level-order) so the `return` pseudo-variable is readable.
-4. The converters live in the private namespace (`_leettrace_*` names, filtered by the existing `_`-prefix rule) so they never appear as user variables. Runner-stub lines stay above `_user_max_line` suppression as today.
-5. If annotations are missing/unrecognized, fall back to today's behavior (pass raw) — never fail extraction because of the converter.
+   - Example keys that name no real parameter are consumed rather than forwarded, so the call can't `TypeError` on them. `pos` is the cycle index in the "Linked List Cycle" family: when `pos >= 0` the tail is linked so `has_cycle` serialization shows it.
+4. Convert the **return value** symmetrically (`ListNode` → list, `TreeNode` → level-order, trailing `None`s trimmed) and surface it as `returnValue` on the result envelope. The per-step `return` pseudo-variable keeps the richer `_serialize` form, which the visualizers want.
+5. **Examples are parsed, never executed.** `dict(<example>)` is parsed as an AST call and each keyword read with `literal_eval`; `null`/`true`/`false` map to their Python spellings. An example whose keys don't name real parameters binds nothing, fails at the call site, and the next example is tried (§11) — deliberately preferred over mapping by position, which would run the solution on silently wrong arguments.
+6. If annotations are missing/unrecognized, fall back to today's behavior (pass raw) — never fail extraction because of the converter.
 
 ---
 
@@ -227,9 +237,10 @@ Suggested issue mapping: one GitHub issue per milestone bullet-group, labeled `P
 
 ## 10. Testing strategy
 
-- **Python tracer tests (fastest ROI):** run the tracer script under plain CPython (it has no Pyodide dependency) with pytest: golden-snapshot tests per problem archetype — two-sum, reverse linked list, level-order traversal, LRU cache, binary search, subsets/backtracking, `while True` (must raise limit error), cyclic linked list, 5k-element input (truncation).
+- **Python tracer tests (fastest ROI):** `tests/tracer/`, run with `npm run test:tracer`. The tracer lives at `src/offscreen/tracer.py` and is inlined into the worker with `?raw`, so pytest imports it directly under plain CPython: golden-snapshot tests per problem archetype — two-sum, reverse linked list, level-order traversal, LRU cache, binary search, subsets/backtracking, `while True` (must raise limit error), cyclic linked list, 5k-element input (truncation).
 - **TS unit tests (vitest):** `processSnapshot` pointer/highlight building, `buildDataStructure` family matching, reducer transitions, `detectPattern` fixtures.
 - **Fixture-driven visualizer dev:** a `mockData.ts` per structure kind + a dev-only panel route that renders visualizers from fixtures (already the README's intended workflow — make it real).
+- **Real-Pyodide smoke test:** `npm run smoke:pyodide` (`scripts/smoke-tracer.mjs`) runs the tracer under actual Pyodide in Node. It covers what CPython cannot — the `<exec>` compile filename, `runPython`/globals marshalling, and budgets unwinding in WASM — without needing Chrome, so it can gate a build.
 - **Manual E2E checklist** (until Playwright + CRX harness is worth it): one problem per structure kind, on both old and new LeetCode UIs, with editor scrolled, after extension reload, and after SPA navigation.
 
 ---

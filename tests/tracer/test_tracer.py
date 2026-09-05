@@ -377,3 +377,14 @@ def test_tree_build_round_trips(tracer, values, expected):
             self.right = right
 
     assert tracer._from_tree_node(tracer._to_tree_node(values, Node)) == expected
+
+
+def test_infinite_loop_stops_under_production_budgets(tracer, run):
+    """No configure() call: the shipped MAX_SNAPSHOTS / MAX_EVENTS must be
+    enough on their own to unwind a runaway loop (B1)."""
+    result = run(fixtures.INFINITE_LOOP, ['n = 1'])
+
+    assert result['truncated'] is True
+    assert result['limit'] in ('events', 'snapshots')
+    assert result['error'] is None
+    assert len(result['snapshots']) <= tracer.MAX_SNAPSHOTS
