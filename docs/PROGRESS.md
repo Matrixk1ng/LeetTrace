@@ -28,8 +28,9 @@
   matrix `{row, col}` pointers, and node pointers for linked lists/trees.
   `Pointer.cell` and `NodePointer` already exist in `shared/types.ts`.
 - **Active branch:** `feature/m2-serialization`, stacked on `feature/m1-hardening`.
-- **Open PRs:** [#15 — M1 Hardening](https://github.com/Matrixk1ng/LeetTrace/pull/15).
-  M2 opens next. **Not merged — ask before merging to `main`.**
+- **Open PRs:** [#15 — M1 Hardening](https://github.com/Matrixk1ng/LeetTrace/pull/15) (base `main`),
+  [#16 — M2 Serialization + routing](https://github.com/Matrixk1ng/LeetTrace/pull/16) (base
+  `feature/m1-hardening`, stacked). **Neither merged — ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
