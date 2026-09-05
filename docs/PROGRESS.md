@@ -9,7 +9,7 @@
 
 - [x] **M1 — Hardening** (worker + interrupts B1, input builders B2, injection fallback B7, B9, B10, B12 types v2, B15, pytest scaffolding)
 - [x] **M2 — Serialization + routing** (B4 dict/list families + deque/set/heap tags, B13, schema v2 fields, B8 per-frame changed)
-- [ ] **M3 — Pointer correctness** (B3 AST index mapping, stable colors, matrix + node pointers)
+- [x] **M3 — Pointer correctness** (B3 AST index mapping, stable colors, matrix + node pointers)
 - [ ] **M4 — Visualizers wave 1** (MatrixViz, StackViz, QueueViz, SetViz, string-as-array, B17)
 - [ ] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
 - [ ] **M6 — Patterns v2** (AST-based detector)
@@ -18,19 +18,22 @@
 
 ## 2. Current state
 
-- **Next task:** Start M3 — pointer correctness. B3 is the big one: a static AST
-  pass in `src/offscreen/tracer.py` mapping each array name to the index
-  variables that actually subscript it (`arr[i]`, `arr[i+1]`, `while i <
-  len(arr)`), emitted alongside the existing `_analyze_usage` output, then
-  consumed in `processSnapshot` (`src/offscreen/snapshot-builder.ts`) to replace
-  the current "every in-range int is a pointer on every array" loop. Also:
-  stable per-name colors for the whole trace (not `colorIdx++` per attach),
-  matrix `{row, col}` pointers, and node pointers for linked lists/trees.
-  `Pointer.cell` and `NodePointer` already exist in `shared/types.ts`.
-- **Active branch:** `feature/m2-serialization`, stacked on `feature/m1-hardening`.
-- **Open PRs:** [#15 — M1 Hardening](https://github.com/Matrixk1ng/LeetTrace/pull/15) (base `main`),
-  [#16 — M2 Serialization + routing](https://github.com/Matrixk1ng/LeetTrace/pull/16) (base
-  `feature/m1-hardening`, stacked). **Neither merged — ask before merging to `main`.**
+- **Next task:** Start M4 — visualizers wave 1. All the data these need now
+  exists: `MatrixViz` (pointers carry `cell`, with `col === -1` meaning a row
+  cursor and `row === -1` a column cursor; a `current` highlight marks the
+  flattened crossing cell), `StackViz`/`HeapViz`-shaped kinds (`kind` on the
+  structure), `QueueViz`/`SetViz` (`{__type, items}` payloads),
+  string-as-char-array, and B17 (HashMapViz should highlight *changed values*,
+  not only new keys, and compare direction-agnostically so stepping backwards
+  doesn't mark the previous step's entry as new). Build each against a
+  `mockData.ts` fixture first (DESIGN.md §10). **Remove the interim
+  `SEQUENCE_KINDS` fallback in `VizRouter.tsx` as each real visualizer lands.**
+- **Active branch:** `feature/m3-pointers`, stacked on `feature/m2-serialization`.
+- **Open PRs (stacked, merge in order):**
+  [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15) → base `main`;
+  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16) → base `feature/m1-hardening`;
+  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) → base `feature/m2-serialization`.
+  **None merged — ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
@@ -39,11 +42,66 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 24 passed |
-| `npm run test:tracer` (pytest) | 65 passed |
+| `npm test` (vitest) | 42 passed |
+| `npm run test:tracer` (pytest) | 83 passed |
 | `npm run smoke:pyodide` | all pass |
 
 ## 3. Session notes
+
+### 2026-09-04 — M3 complete (pointer correctness)
+
+**B3 — the static indexing pass.** `_analyze_indexing` in `tracer.py` builds
+`{array: {row: [names], col: [names]}}` from the AST. Signals: a bare-name
+subscript (`nums[i]`), a 2-D subscript (`grid[i][j]` — outer is the row axis,
+inner the column axis), a bound comparison (`while i < len(nums)`) and
+`for i in range(len(nums))`. Two refinements that mattered:
+
+- **Annotations are skipped.** `List[int]` is an `ast.Subscript` exactly like
+  `nums[i]`, so the first version cheerfully recorded `int` as an index of
+  `List`. `_walk_code` skips `arg.annotation`, `FunctionDef.returns` and
+  `AnnAssign.annotation`.
+- **Compound slices don't invent indices.** `nums[r - k]` is evidence about the
+  expression, not about `k`; only bare-name slices are a strong signal, and
+  compound ones can then reinforce names already known for that array. Without
+  this, `nums[stack[-1]]` made `stack` an index of `nums`.
+
+The conventional-name allowlist only ever *extends* an association static
+analysis already found (through a comparison or an assignment, to a fixpoint) —
+it never invents one. That's what lets binary search work: only `mid` ever
+subscripts `nums`, and `mid = (lo + hi) // 2` carries the association to `lo`
+and `hi`, while `while i < target` still can't turn `target` into an arrow.
+
+**Stable colours.** `createColorAssigner` hands each *name* one colour for the
+whole trace, seeded from the static map so the assignment depends on the code
+rather than on which step first mentioned a name. The old code advanced a
+counter on every attach, so a variable changed colour between steps and between
+arrays.
+
+**Matrix pointers.** Row and column cursors are separate pointers carrying
+`cell`, where `-1` on the other axis says which axis this one moves along. A
+`current` highlight marks the flattened crossing cell. Convention documented on
+`Pointer` in `shared/types.ts`.
+
+**Node pointers.** `_serialize` now emits `nodeIds` for linked lists and an `id`
+per tree node (stringified — `id()` is a machine address and can exceed 2**53,
+which JSON numbers can't carry into JS losslessly). `collapseNodeAliases` uses
+that identity to fold variables that alias a node of a bigger structure into
+`nodePointers` on it. Before, `slow`/`fast`/`curr` each serialized as a whole
+list of their own, so a cycle-detection trace rendered three overlapping chains
+instead of one list with three cursors. Genuinely separate chains (`prev` in
+reverseList, built from already-detached nodes) still get their own card.
+Linked lists also gained `cycleIndex`, which LinkedListViz needs in M5.
+
+**Known minor false positive:** in `for r in range(len(nums)): ... if r >= k:`,
+the comparison carries `k` onto `nums` because `k` is on the design doc's
+allowlist. Harmless (it renders an extra cursor) and strictly better than the
+old behaviour; removing `k`/`l` from the list would fix it but deviates from
+DESIGN.md §2 B3, so it was left as specified.
+
+**Not verified — needs a human at `chrome://extensions`** (on top of the M1/M2
+lists): trace two-sum and confirm `target` is **no longer** an arrow on `nums`;
+trace binary search and confirm `lo`/`hi`/`mid` all show with stable colours
+that don't change between steps.
 
 ### 2026-09-04 — M2 complete (serialization families, routing, per-frame changed)
 
@@ -157,6 +215,14 @@ every step of a `Solution` method (pre-existing; it eats a gutter badge slot).
 Fix belongs with the variable-display work in M4/M8.
 
 ## 4. Deviations from the design doc
+
+- **M3: matrix pointer encoding.** DESIGN.md §4 said a matrix pointer's `index`
+  addresses the flattened cell. Implemented instead as one pointer per axis
+  variable, with `cell.row`/`cell.col` set to `-1` on the axis it doesn't move
+  along and `index` holding its position on the axis it does. A single
+  flattened index can't represent a row cursor whose column isn't known yet,
+  which is most of a row-major scan. The flattened index still appears, as the
+  `current` highlight on the crossing cell. DESIGN.md §4 updated.
 
 - **M2: VizRouter renders sequence kinds with ArrayViz for now.** Tagging lists
   as `stack`/`heap` and deques as `queue` in M2 would otherwise push structures

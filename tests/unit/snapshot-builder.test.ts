@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildDataStructure, isMatrix, processSnapshot } from '../../src/offscreen/snapshot-builder';
+import {
+  buildDataStructure,
+  createTraceContext,
+  isMatrix,
+  processSnapshot,
+} from '../../src/offscreen/snapshot-builder';
 import type { VariableState } from '../../src/shared/types';
 
 function variable(partial: Partial<VariableState> & Pick<VariableState, 'value' | 'type'>): VariableState {
@@ -125,7 +130,7 @@ describe('processSnapshot', () => {
   };
 
   it('carries the schema v2 fields through', () => {
-    const snap = processSnapshot(raw);
+    const snap = processSnapshot(raw, createTraceContext());
     expect(snap).toMatchObject({
       step: 0,
       line: 4,
@@ -137,7 +142,7 @@ describe('processSnapshot', () => {
   });
 
   it('builds one structure per routable variable', () => {
-    const snap = processSnapshot(raw);
+    const snap = processSnapshot(raw, createTraceContext());
     expect(snap.dataStructures.map((d) => [d.id, d.type])).toEqual([
       ['nums', 'array'],
       ['seen', 'hashmap'],
@@ -145,7 +150,7 @@ describe('processSnapshot', () => {
   });
 
   it('omits stdout when the step emitted none', () => {
-    expect(processSnapshot(raw).stdout).toBeUndefined();
-    expect(processSnapshot({ ...raw, stdout: 'hi\n' }).stdout).toBe('hi\n');
+    expect(processSnapshot(raw, createTraceContext()).stdout).toBeUndefined();
+    expect(processSnapshot({ ...raw, stdout: 'hi\n' }, createTraceContext()).stdout).toBe('hi\n');
   });
 });
