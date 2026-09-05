@@ -8,6 +8,7 @@
     "prebuild": "node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "vitest run",
     "test:tracer": "python -m pytest",
     "smoke:pyodide": "node scripts/smoke-tracer.mjs",
     "preview": "vite preview"
@@ -35,6 +36,7 @@
     "tailwindcss": "^4.2.4",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "vitest": "^5.0.0"
   }
 }

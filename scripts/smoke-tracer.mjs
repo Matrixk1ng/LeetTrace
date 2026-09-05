@@ -68,6 +68,24 @@ const BOOM = `class Solution:
         return nums[99]
 `;
 
+const BFS = `class Solution:
+    def bfs(self, n: int) -> List[int]:
+        queue = deque([0])
+        seen = set()
+        heap = []
+        order = []
+        while queue:
+            node = queue.popleft()
+            if node in seen:
+                continue
+            seen.add(node)
+            heapq.heappush(heap, node)
+            order.append(node)
+            if node + 1 < n:
+                queue.append(node + 1)
+        return order
+`;
+
 let failures = 0;
 function check(label, cond, detail) {
   if (cond) { console.log('  PASS', label); }
@@ -85,6 +103,19 @@ console.log('reverse linked list (B2 input building)');
 r = run(REVERSE, ['head = [1,2,3,4,5]']);
 check('no error', r.error === null, r.error);
 check('returnValue reversed', JSON.stringify(r.returnValue) === '[5,4,3,2,1]', r.returnValue);
+
+console.log('deque / set / heap tags (B4)');
+r = run(BFS, ['n = 4']);
+check('no error', r.error === null, r.error);
+const lastWith = (name) => {
+  for (let i = r.snapshots.length - 1; i >= 0; i--) {
+    if (r.snapshots[i].variables[name]) return r.snapshots[i].variables[name];
+  }
+  return null;
+};
+check('deque tagged', lastWith('queue')?.value?.__type === 'deque', lastWith('queue'));
+check('set tagged', lastWith('seen')?.value?.__type === 'set', lastWith('seen'));
+check('heap kind inferred', lastWith('heap')?.kind === 'heap', lastWith('heap'));
 
 console.log('infinite loop (B1 budgets)');
 const t0 = Date.now();

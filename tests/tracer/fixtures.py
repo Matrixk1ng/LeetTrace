@@ -168,3 +168,72 @@ BIG_INPUT = '''class Solution:
             acc += x
         return acc
 '''
+
+# --- M2: serialization families ------------------------------------------
+
+BFS_DEQUE = '''class Solution:
+    def bfs(self, n: int) -> List[int]:
+        queue = deque([0])
+        seen = set()
+        order = []
+        while queue:
+            node = queue.popleft()
+            if node in seen:
+                continue
+            seen.add(node)
+            order.append(node)
+            if node + 1 < n:
+                queue.append(node + 1)
+        return order
+'''
+
+HEAP_TOP_K = '''class Solution:
+    def topK(self, nums: List[int], k: int) -> List[int]:
+        heap = []
+        for x in nums:
+            heapq.heappush(heap, x)
+            if len(heap) > k:
+                heapq.heappop(heap)
+        return sorted(heap)
+'''
+
+MONOTONIC_STACK = '''class Solution:
+    def nextGreater(self, nums: List[int]) -> List[int]:
+        out = [-1] * len(nums)
+        stack = []
+        for i, x in enumerate(nums):
+            while stack and nums[stack[-1]] < x:
+                out[stack.pop()] = x
+            stack.append(i)
+        return out
+'''
+
+COUNTER_ANAGRAM = '''class Solution:
+    def isAnagram(self, s: str, t: str) -> bool:
+        counts = Counter(s)
+        groups = defaultdict(list)
+        for ch in t:
+            counts[ch] -= 1
+            groups[ch].append(ch)
+        return all(v == 0 for v in counts.values())
+'''
+
+MATRIX_SUM = '''class Solution:
+    def gridSum(self, grid: List[List[int]]) -> int:
+        total = 0
+        for row in grid:
+            for cell in row:
+                total += cell
+        return total
+'''
+
+RECURSION_SHADOWING = '''class Solution:
+    def walk(self, n: int) -> int:
+        def helper(depth):
+            local = depth * 10
+            if depth == 0:
+                return local
+            return helper(depth - 1) + local
+
+        return helper(n)
+'''
