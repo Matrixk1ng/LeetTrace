@@ -43,7 +43,12 @@ MAX_STDOUT_CHARS = 200000
 
 # Filename the user's code is compiled under. The trace function ignores every
 # frame from anywhere else (stdlib internals, this module's own helpers).
-USER_FILENAME = '<exec>'
+#
+# It must not be '<exec>': Pyodide's runPython() compiles with exactly that
+# name, so this module's own frames would be indistinguishable from the user's
+# once it is loaded in the browser — silently breaking the error-line walk and
+# the next-example retry, in a way the CPython tests can't reproduce.
+USER_FILENAME = '<leettrace-user-code>'
 
 
 class LeetTraceLimitError(BaseException):
@@ -201,6 +206,21 @@ def _frame_info(frame):
     return _frames.get(id(frame)) or _register_frame(frame)
 
 
+def _is_class_body(frame):
+    """True for the frame that executes a `class X:` suite.
+
+    Running a class body is not an algorithm step — it would emit empty steps
+    on the `class Solution:` line, and one whose only variable is the method
+    object being defined, before the trace reaches any real code.
+
+    Class bodies and module frames share their locals with a real dict, so
+    they lack CO_OPTIMIZED (0x1), which every function frame has. That flag is
+    set at compile time, unlike __qualname__, which isn't in f_locals yet when
+    the body's first events fire.
+    """
+    return not (frame.f_code.co_flags & 0x1) and frame.f_code.co_name != '<module>'
+
+
 def _collect_locals(frame):
     current = {}
     for k, v in frame.f_locals.items():
@@ -253,6 +273,9 @@ def _tracer(frame, event, arg):
         return _tracer
 
     if event not in ('line', 'call', 'return'):
+        return _tracer
+
+    if _is_class_body(frame):
         return _tracer
 
     # The module frame's own call/line/return events are the class definition

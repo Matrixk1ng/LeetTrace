@@ -1,6 +1,7 @@
 import { extractCode, isDebugEnabled } from './editor-hook';
 import { injectFAB } from './fab';
-import { clearGutterAnnotations, updateGutterAnnotations, type GutterAnnotation } from './gutter';
+import { clearGutterAnnotations, updateGutterAnnotations } from './gutter';
+import type { ExtractCodeResponse, Message } from '../shared/types';
 
 const DEBUG_EVENT = 'LEETTRACE_DEBUG_EXTRACT';
 const DEBUG_GUTTER_UPDATE_EVENT = 'LEETTRACE_DEBUG_GUTTER_UPDATE';
@@ -11,15 +12,7 @@ const GUTTER_CLEAR_DEBOUNCE_MS = 1000;
 let editorObserver: MutationObserver | null = null;
 let clearDebounceTimer: number | null = null;
 
-interface RuntimeMessage {
-	type?: string;
-	payload?: {
-		line?: number;
-		annotations?: GutterAnnotation[];
-	};
-}
-
-async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<{ code: string; language: string; examples: string[] }> {
+async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<ExtractCodeResponse['payload']> {
 	const payload = await extractCode();
 
 	if (isDebugEnabled()) {
@@ -75,7 +68,11 @@ function waitForMonacoEditorAndObserve(): void {
 	}, EDITOR_POLL_INTERVAL_MS);
 }
 
-chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((
+	message: Message,
+	_sender,
+	sendResponse: (response: ExtractCodeResponse) => void,
+) => {
 	if (message?.type === 'EXTRACT_CODE') {
 		void runExtraction('runtime-message')
 			.then((payload) => {
@@ -91,14 +88,13 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
 	}
 
 	if (message?.type === 'UPDATE_GUTTER') {
-		const line = message.payload?.line;
-		const annotations = message.payload?.annotations;
+		const { line, annotations } = message.payload;
 
 		if (typeof line === 'number' && Array.isArray(annotations)) {
 			updateGutterAnnotations(line, annotations);
 		}
 
-		return;
+		return false;
 	}
 
 	if (message?.type === 'CLEAR_GUTTER') {

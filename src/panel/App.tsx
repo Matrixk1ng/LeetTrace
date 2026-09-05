@@ -3,7 +3,7 @@ import PatternBadge from './components/PatternBadge';
 import VariableInspector from './components/VariableInspector';
 import VizRouter from './components/visualizers/VizRouter';
 import { useExecution } from './hooks/useExecution';
-import { useTrace } from './store/TraceContext';
+import { useTrace } from './store/useTrace';
 import './App.css';
 
 /**

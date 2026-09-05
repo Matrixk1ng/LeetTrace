@@ -1,4 +1,4 @@
-import { useTrace } from '../store/TraceContext';
+import { useTrace } from '../store/useTrace';
 
 function prettifyPatternName(name: string): string {
   return name

@@ -239,7 +239,7 @@ function extractExampleInputs(): string[] {
   ];
 
   for (const el of candidates) {
-    const text = (el.textContent ?? '').replace(/ /g, ' ');
+    const text = (el.textContent ?? '').replace(/\u00a0/g, ' ');
     inputRegex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = inputRegex.exec(text)) !== null) {

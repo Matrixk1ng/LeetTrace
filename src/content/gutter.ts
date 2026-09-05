@@ -1,3 +1,5 @@
+import type { GutterAnnotation } from '../shared/types';
+
 const GUTTER_BADGE_CLASS = 'leettrace-gutter-badge';
 const GUTTER_ITEM_CLASS = 'leettrace-gutter-item';
 const GUTTER_OVERLAY_CLASS = 'leettrace-gutter-overlay';
@@ -6,11 +8,7 @@ const GUTTER_ITEM_UNCHANGED_CLASS = 'leettrace-gutter-item-unchanged';
 const GUTTER_LINE_HIGHLIGHT_CLASS = 'leettrace-line-highlight';
 const EDITOR_ROOT_CLASS = 'leettrace-editor-root';
 
-export interface GutterAnnotation {
-  variable: string;
-  value: string;
-  changed: boolean;
-}
+export type { GutterAnnotation };
 
 function createAnnotationItem(annotation: GutterAnnotation): HTMLSpanElement {
   const item = document.createElement('span');
