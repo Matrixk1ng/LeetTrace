@@ -1,5 +1,5 @@
 import type { VariableState } from '../../shared/types';
-import { useTrace } from '../store/TraceContext';
+import { useTrace } from '../store/useTrace';
 
 function formatBooleanLike(value: unknown): string {
   if (value === null) {

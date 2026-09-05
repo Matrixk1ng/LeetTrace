@@ -1,6 +1,6 @@
 import type { ChangeEvent } from 'react';
 import { MAX_SPEED, MIN_SPEED } from '../../shared/constants';
-import { useTrace } from '../store/TraceContext';
+import { useTrace } from '../store/useTrace';
 
 function ResetIcon() {
   return (

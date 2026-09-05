@@ -1,8 +1,14 @@
 import { useEffect, useRef } from 'react';
-import type { Snapshot, DetectedPattern, GutterAnnotation } from '../../shared/types';
-import { useTrace } from '../store/TraceContext';
+import type {
+  ExecutionResponse,
+  ExtractCodeResponse,
+  GutterAnnotation,
+  Message,
+  Snapshot,
+} from '../../shared/types';
+import { useTrace } from '../store/useTrace';
 
-function isRuntimeMessage(message: unknown): message is { type: string; payload?: { progress?: number; error?: string; line?: number; snapshots?: unknown[]; pattern?: unknown } } {
+function isRuntimeMessage(message: unknown): message is Message {
   return typeof message === 'object' && message !== null && 'type' in message;
 }
 
@@ -48,7 +54,7 @@ export function useExecution() {
       }
 
       if (message.type === 'PYODIDE_LOADING') {
-        const progress = message.payload?.progress;
+        const progress = message.payload.progress;
         const suffix = typeof progress === 'number' ? ` (${progress}%)` : '';
         dispatch({ type: 'SET_LOADING', payload: `Loading Python runtime...${suffix}` });
       }
@@ -72,7 +78,9 @@ export function useExecution() {
     if (typeof tabId !== 'number') return;
 
     if (state.status === 'idle' || state.status === 'error' || state.totalSteps === 0) {
-      void chrome.tabs.sendMessage(tabId, { type: 'CLEAR_GUTTER' }).catch(() => {});
+      void chrome.tabs
+        .sendMessage(tabId, { type: 'CLEAR_GUTTER' } satisfies Message)
+        .catch(() => {});
       return;
     }
 
@@ -85,7 +93,7 @@ export function useExecution() {
       .sendMessage(tabId, {
         type: 'UPDATE_GUTTER',
         payload: { line: editorLine, annotations },
-      })
+      } satisfies Message)
       .catch(() => {});
   }, [currentSnapshot, state.status, state.totalSteps]);
 
@@ -138,10 +146,13 @@ export function useExecution() {
 
       leetcodeTabIdRef.current = tabId;
 
-      let extracted: { ok: boolean; payload: { code: string; language: string; examples?: string[] } } | undefined;
+      let extracted: ExtractCodeResponse | undefined;
       try {
-        // Route through background so it can inject the content script if needed
-        extracted = await chrome.runtime.sendMessage({ type: 'EXTRACT_CODE' }) as typeof extracted;
+        // Routed through the background worker so it can re-inject the content
+        // script when the page has none (B7).
+        extracted = await chrome.runtime.sendMessage(
+          { type: 'EXTRACT_CODE' } satisfies Message,
+        ) as ExtractCodeResponse | undefined;
       } catch (e) {
         console.warn('[LeetTrace] EXTRACT_CODE failed:', e);
       }
@@ -166,10 +177,7 @@ export function useExecution() {
       const response = await chrome.runtime.sendMessage({
         type: 'EXECUTE_CODE',
         payload: { code, examples },
-      }) as
-        | { type: 'EXECUTION_RESULT'; payload: { snapshots: Snapshot[]; pattern?: DetectedPattern } }
-        | { type: 'EXECUTION_ERROR'; payload: { error: string; line?: number } }
-        | undefined;
+      } satisfies Message) as ExecutionResponse | undefined;
       console.log('[LeetTrace] background response:', response);
 
       if (!response) {
@@ -185,13 +193,7 @@ export function useExecution() {
         return;
       }
 
-      dispatch({
-        type: 'LOAD_SNAPSHOTS',
-        payload: {
-          snapshots: response.payload.snapshots,
-          pattern: response.payload.pattern,
-        },
-      });
+      dispatch({ type: 'LOAD_SNAPSHOTS', payload: response.payload });
     } catch (error) {
       console.error('[LeetTrace] requestTrace error:', error);
       dispatch({

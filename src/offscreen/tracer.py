@@ -1,0 +1,842 @@
+"""LeetTrace execution tracer.
+
+Runs a user's LeetCode Python solution under ``sys.settrace`` and emits one
+raw snapshot per traced event. This module is deliberately free of any Pyodide
+or browser dependency: it is inlined into the Pyodide worker at build time
+(``import tracer from './tracer.py?raw'``) *and* imported directly by the
+pytest suite in ``tests/tracer/`` under plain CPython.
+
+Public entry point: ``run_traced(code_string, examples) -> json string``.
+
+Output shape (raw snapshot schema v2 — see docs/DESIGN.md section 4; the
+TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
+
+    {
+      "snapshots": [
+        {"step", "line", "event", "frameId", "frameName", "callDepth",
+         "variables": {name: {"value", "type", "changed"}}, "stdout"?}
+      ],
+      "truncated": bool,
+      "limit": "events" | "snapshots" | null,
+      "error": {"message": str, "line": int} | null,
+      "returnValue": <serialized> | null
+    }
+"""
+
+import ast
+import json
+import sys
+
+# --------------------------------------------------------------------------
+# Budgets
+#
+# MAX_SNAPSHOTS caps what we ship to the panel. MAX_EVENTS caps *execution*:
+# without it, `while True: pass` keeps running after the snapshot cap turns
+# tracing off and hangs the worker forever (bug B1). Both are enforced by
+# raising LeetTraceLimitError from inside the trace function, which unwinds
+# the user's code instead of letting it spin.
+# --------------------------------------------------------------------------
+
+MAX_SNAPSHOTS = 5000
+MAX_EVENTS = 200000
+MAX_STDOUT_CHARS = 200000
+
+# Filename the user's code is compiled under. The trace function ignores every
+# frame from anywhere else (stdlib internals, this module's own helpers).
+#
+# It must not be '<exec>': Pyodide's runPython() compiles with exactly that
+# name, so this module's own frames would be indistinguishable from the user's
+# once it is loaded in the browser — silently breaking the error-line walk and
+# the next-example retry, in a way the CPython tests can't reproduce.
+USER_FILENAME = '<leettrace-user-code>'
+
+
+class LeetTraceLimitError(BaseException):
+    """Raised from the trace function when a budget is exhausted.
+
+    Subclasses BaseException, not Exception: it is raised *inside* the user's
+    frame, and a solution wrapping its loop in `except Exception` would
+    otherwise swallow the very error that stops the runaway execution.
+    """
+
+
+def configure(max_snapshots=None, max_events=None):
+    """Override the budgets from the host (shared/constants.ts is the source
+    of truth for both, so they stay in sync with what the panel reports)."""
+    global MAX_SNAPSHOTS, MAX_EVENTS
+    if isinstance(max_snapshots, int) and max_snapshots > 0:
+        MAX_SNAPSHOTS = max_snapshots
+    if isinstance(max_events, int) and max_events > 0:
+        MAX_EVENTS = max_events
+
+
+# Names that _build_namespace() injects (typing helpers, ListNode/TreeNode,
+# stdlib modules). These are not user variables, so they should never appear
+# as snapshot variables or count toward "is this snapshot interesting?".
+_BASELINE_NAMES = frozenset({
+    'List', 'Dict', 'Set', 'Tuple', 'Optional', 'Any', 'Union', 'Deque',
+    'defaultdict', 'deque', 'Counter', 'OrderedDict',
+    'math', 'heapq', 'bisect', 'functools', 'itertools',
+    'ListNode', 'TreeNode', 'Solution',
+})
+
+# --------------------------------------------------------------------------
+# Mutable trace state (reset by run_traced)
+# --------------------------------------------------------------------------
+
+_snapshots = []
+_prev_locals = {}
+_user_max_line = 10 ** 9
+_events = 0
+_truncated = False
+_limit_kind = None
+_frames = {}
+_frame_seq = 0
+_stdout = None
+
+
+class _StdoutCapture:
+    """Collects print() output so each snapshot can carry what it emitted.
+
+    Chunks are drained per snapshot, so appending is O(1) rather than
+    re-reading a growing StringIO on every step.
+    """
+
+    def __init__(self):
+        self.chunks = []
+        self.total = 0
+
+    def write(self, text):
+        text = str(text)
+        if self.total < MAX_STDOUT_CHARS:
+            self.chunks.append(text)
+            self.total += len(text)
+        return len(text)
+
+    def drain(self):
+        if not self.chunks:
+            return None
+        out = ''.join(self.chunks)
+        self.chunks = []
+        return out
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+# --------------------------------------------------------------------------
+# Serialization
+# --------------------------------------------------------------------------
+
+def _serialize(v, _depth=0):
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+
+    if isinstance(v, (list, tuple)):
+        return [_serialize(x, _depth + 1) for x in v]
+
+    if isinstance(v, dict):
+        return {str(k): _serialize(val, _depth + 1) for k, val in v.items()}
+
+    if isinstance(v, (set, frozenset)):
+        try:
+            return sorted([_serialize(x, _depth + 1) for x in v], key=str)
+        except Exception:
+            return [_serialize(x, _depth + 1) for x in v]
+
+    if (hasattr(v, 'val') and hasattr(v, 'next')
+            and not hasattr(v, 'left') and not hasattr(v, 'right')):
+        nodes = []
+        seen = set()
+        cur = v
+        has_cycle = False
+        while cur is not None:
+            node_id = id(cur)
+            if node_id in seen:
+                has_cycle = True
+                break
+            seen.add(node_id)
+            nodes.append(_serialize(cur.val))
+            cur = cur.next
+        return {'__type': 'linked_list', 'nodes': nodes, 'has_cycle': has_cycle}
+
+    if hasattr(v, 'val') and hasattr(v, 'left') and hasattr(v, 'right'):
+        if _depth > 10:
+            return repr(v)
+        return {'__type': 'tree', 'root': _serialize_tree_node(v, _depth)}
+
+    return repr(v)
+
+
+def _serialize_tree_node(node, depth=0):
+    if node is None or depth > 10:
+        return None
+    return {
+        'val': _serialize(node.val),
+        'left': _serialize_tree_node(getattr(node, 'left', None), depth + 1),
+        'right': _serialize_tree_node(getattr(node, 'right', None), depth + 1),
+    }
+
+
+# --------------------------------------------------------------------------
+# Trace function
+# --------------------------------------------------------------------------
+
+def _register_frame(frame):
+    """Assign a stable id/name/depth to a frame on its 'call' event.
+
+    id(frame) is reused once a frame is collected, so the registry entry is
+    dropped on 'return' and the monotonic sequence number keeps ids unique
+    across the whole trace (needed for per-frame `changed` and CallStackViz).
+    """
+    global _frame_seq
+    _frame_seq += 1
+    parent = _frames.get(id(frame.f_back))
+    depth = (parent['depth'] + 1) if parent else 0
+    name = frame.f_code.co_name
+    info = {'id': name + '#' + str(_frame_seq), 'name': name, 'depth': depth}
+    _frames[id(frame)] = info
+    return info
+
+
+def _frame_info(frame):
+    return _frames.get(id(frame)) or _register_frame(frame)
+
+
+def _is_class_body(frame):
+    """True for the frame that executes a `class X:` suite.
+
+    Running a class body is not an algorithm step — it would emit empty steps
+    on the `class Solution:` line, and one whose only variable is the method
+    object being defined, before the trace reaches any real code.
+
+    Class bodies and module frames share their locals with a real dict, so
+    they lack CO_OPTIMIZED (0x1), which every function frame has. That flag is
+    set at compile time, unlike __qualname__, which isn't in f_locals yet when
+    the body's first events fire.
+    """
+    return not (frame.f_code.co_flags & 0x1) and frame.f_code.co_name != '<module>'
+
+
+def _collect_locals(frame):
+    current = {}
+    for k, v in frame.f_locals.items():
+        if k.startswith('_') or k in _BASELINE_NAMES:
+            continue
+        try:
+            current[k] = {
+                'value': _serialize(v),
+                'type': type(v).__name__,
+                'changed': k not in _prev_locals or _prev_locals.get(k) != repr(v),
+            }
+        except Exception:
+            current[k] = {
+                'value': repr(v),
+                'type': type(v).__name__,
+                'changed': True,
+            }
+    return current
+
+
+def _tracer(frame, event, arg):
+    global _prev_locals, _events, _truncated, _limit_kind
+
+    if frame.f_code.co_filename != USER_FILENAME:
+        return None
+
+    _events += 1
+    if _events > MAX_EVENTS:
+        _truncated = True
+        _limit_kind = 'events'
+        raise LeetTraceLimitError(
+            'Execution stopped after ' + str(MAX_EVENTS)
+            + ' steps — this looks like an infinite loop.'
+        )
+
+    if event == 'call':
+        info = _register_frame(frame)
+    else:
+        info = _frame_info(frame)
+
+    is_module_frame = info['name'] == '<module>'
+
+    # Suppress snapshots for the auto-injected runner stub (lines beyond the
+    # user's original code). We still keep tracing because calls into the
+    # user's method body originate from there.
+    if frame.f_lineno > _user_max_line:
+        return _tracer
+
+    if event == 'exception':
+        return _tracer
+
+    if event not in ('line', 'call', 'return'):
+        return _tracer
+
+    if _is_class_body(frame):
+        return _tracer
+
+    # The module frame's own call/line/return events are the class definition
+    # and the runner stub — never user algorithm steps.
+    if is_module_frame:
+        if event != 'line':
+            return _tracer
+
+    if len(_snapshots) >= MAX_SNAPSHOTS:
+        _truncated = True
+        _limit_kind = 'snapshots'
+        raise LeetTraceLimitError(
+            'Stopped after ' + str(MAX_SNAPSHOTS) + ' steps.'
+        )
+
+    current_locals = _collect_locals(frame)
+
+    if event == 'return':
+        # Surface the returned value as a synthetic 'return' variable so the
+        # user can see the function's result on the final snapshot.
+        if not is_module_frame and arg is not None:
+            try:
+                current_locals['return'] = {
+                    'value': _serialize(arg),
+                    'type': type(arg).__name__,
+                    'changed': True,
+                }
+            except Exception:
+                current_locals['return'] = {
+                    'value': repr(arg),
+                    'type': type(arg).__name__,
+                    'changed': True,
+                }
+
+    # Skip class-definition / runner-stub line events that have no user
+    # variables — these would otherwise show up as empty "junk" steps before
+    # the real method body executes.
+    if is_module_frame and not current_locals:
+        return _tracer
+
+    snapshot = {
+        'step': len(_snapshots),
+        'line': frame.f_lineno,
+        'event': event,
+        'frameId': info['id'],
+        'frameName': info['name'],
+        'callDepth': info['depth'],
+        'variables': current_locals,
+    }
+
+    if _stdout is not None:
+        emitted = _stdout.drain()
+        if emitted:
+            snapshot['stdout'] = emitted
+
+    _snapshots.append(snapshot)
+
+    _prev_locals = {
+        k: repr(v) for k, v in frame.f_locals.items()
+        if not k.startswith('_') and k not in _BASELINE_NAMES
+    }
+
+    if event == 'return':
+        _frames.pop(id(frame), None)
+
+    return _tracer
+
+
+# --------------------------------------------------------------------------
+# Execution namespace
+# --------------------------------------------------------------------------
+
+def _build_namespace():
+    # LeetCode prepends these imports invisibly. Replicate them so user code
+    # that uses List[int], Optional[ListNode], etc. works without modification.
+    from typing import List, Dict, Set, Tuple, Optional, Any, Union, Deque
+    from collections import defaultdict, deque, Counter, OrderedDict
+    import math
+    import heapq
+    import bisect
+    import functools
+    import itertools
+
+    class ListNode:
+        def __init__(self, val=0, next=None):
+            self.val = val
+            self.next = next
+
+    class TreeNode:
+        def __init__(self, val=0, left=None, right=None):
+            self.val = val
+            self.left = left
+            self.right = right
+
+    return {
+        'List': List, 'Dict': Dict, 'Set': Set, 'Tuple': Tuple,
+        'Optional': Optional, 'Any': Any, 'Union': Union, 'Deque': Deque,
+        'defaultdict': defaultdict, 'deque': deque,
+        'Counter': Counter, 'OrderedDict': OrderedDict,
+        'math': math, 'heapq': heapq, 'bisect': bisect,
+        'functools': functools, 'itertools': itertools,
+        'ListNode': ListNode, 'TreeNode': TreeNode,
+    }
+
+
+# --------------------------------------------------------------------------
+# Input builders (bug B2 — see docs/DESIGN.md section 6)
+#
+# LeetCode examples are scraped as flat text ("head = [1,2,4], pos = 1"), but
+# problems typed Optional[ListNode] / Optional[TreeNode] need real node objects
+# or the user's first `head.val` raises AttributeError. We read the method's
+# annotations off the AST and convert each argument before the call.
+# --------------------------------------------------------------------------
+
+def _to_list_node(values, list_node_cls):
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        return values
+    head = None
+    tail = None
+    for v in values:
+        node = list_node_cls(v)
+        if head is None:
+            head = node
+        else:
+            tail.next = node
+        tail = node
+    return head
+
+
+def _link_cycle(head, pos):
+    """Connect the tail of a linked list back to index `pos` (LeetCode's
+    cycle encoding: pos == -1 means no cycle)."""
+    if head is None or not isinstance(pos, int) or pos < 0:
+        return head
+    nodes = []
+    cur = head
+    while cur is not None:
+        nodes.append(cur)
+        cur = cur.next
+    if pos >= len(nodes):
+        return head
+    nodes[-1].next = nodes[pos]
+    return head
+
+
+def _to_tree_node(values, tree_node_cls):
+    """Level-order build with None gaps — LeetCode's standard encoding."""
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        return values
+    items = list(values)
+    if not items or items[0] is None:
+        return None
+
+    root = tree_node_cls(items[0])
+    queue = [root]
+    head = 0
+    i = 1
+    while i < len(items) and head < len(queue):
+        node = queue[head]
+        head += 1
+
+        if i < len(items):
+            val = items[i]
+            i += 1
+            if val is not None:
+                node.left = tree_node_cls(val)
+                queue.append(node.left)
+
+        if i < len(items):
+            val = items[i]
+            i += 1
+            if val is not None:
+                node.right = tree_node_cls(val)
+                queue.append(node.right)
+
+    return root
+
+
+def _from_list_node(node):
+    values = []
+    seen = set()
+    cur = node
+    while cur is not None:
+        if id(cur) in seen:
+            break
+        seen.add(id(cur))
+        values.append(cur.val)
+        cur = cur.next
+    return values
+
+
+def _from_tree_node(root):
+    """Inverse of _to_tree_node: level order with None gaps, trailing Nones
+    trimmed (matches how LeetCode prints tree answers)."""
+    if root is None:
+        return []
+    out = []
+    queue = [root]
+    head = 0
+    while head < len(queue):
+        node = queue[head]
+        head += 1
+        if node is None:
+            out.append(None)
+            continue
+        out.append(node.val)
+        queue.append(getattr(node, 'left', None))
+        queue.append(getattr(node, 'right', None))
+    while out and out[-1] is None:
+        out.pop()
+    return out
+
+
+def _convert_return(value):
+    """Convert a returned ListNode/TreeNode back to its list encoding so the
+    result is readable (section 6.3). Everything else passes through."""
+    if value is None:
+        return None
+    if (hasattr(value, 'val') and hasattr(value, 'next')
+            and not hasattr(value, 'left') and not hasattr(value, 'right')):
+        return _from_list_node(value)
+    if hasattr(value, 'val') and hasattr(value, 'left') and hasattr(value, 'right'):
+        return _from_tree_node(value)
+    if isinstance(value, (list, tuple)):
+        return [_convert_return(x) for x in value]
+    return _serialize(value)
+
+
+def _classify_annotation(text):
+    """Map an unparsed annotation to a converter kind, or None to pass through."""
+    if not text:
+        return None
+    t = text.replace(' ', '')
+    is_sequence = t.startswith('List[') or t.startswith('list[')
+    if 'ListNode' in t:
+        return 'list_of_list_node' if is_sequence else 'list_node'
+    if 'TreeNode' in t:
+        return 'list_of_tree_node' if is_sequence else 'tree_node'
+    return None
+
+
+def _method_signature(fn_node):
+    """(param_names, {param: annotation_kind}) for a FunctionDef, minus self."""
+    args = fn_node.args
+    params = [a.arg for a in (list(args.posonlyargs) + list(args.args)) if a.arg != 'self']
+    kinds = {}
+    for a in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
+        if a.arg == 'self':
+            continue
+        if a.arg not in params:
+            params.append(a.arg)
+        annotation = None
+        if a.annotation is not None:
+            try:
+                annotation = ast.unparse(a.annotation)
+            except Exception:
+                annotation = None
+        kind = _classify_annotation(annotation)
+        if kind:
+            kinds[a.arg] = kind
+    return params, kinds
+
+
+def _parse_example(example):
+    """Parse "nums = [2,7,11,15], target = 9" into {'nums': [...], 'target': 9}.
+
+    Wrapping in dict(...) and reading the AST keywords is safer than eval and
+    still handles LeetCode's JSON-ish literals once null/true/false are mapped
+    onto their Python spellings.
+    """
+    if not example or not isinstance(example, str):
+        return None
+
+    text = example.strip()
+    if text.lower().startswith('input:'):
+        text = text[len('input:'):].strip()
+
+    try:
+        wrapped = ast.parse('dict(' + text + ')', mode='eval')
+    except SyntaxError:
+        return None
+
+    call = wrapped.body
+    if not isinstance(call, ast.Call) or call.args or not call.keywords:
+        return None
+
+    out = {}
+    for kw in call.keywords:
+        if kw.arg is None:
+            return None
+        try:
+            out[kw.arg] = _literal(kw.value)
+        except Exception:
+            return None
+    return out
+
+
+def _literal(node):
+    """literal_eval, but tolerating the unary minus / JSON spellings that
+    ast.literal_eval already handles plus bare names mapped earlier."""
+    if isinstance(node, ast.Name):
+        if node.id == 'null':
+            return None
+        if node.id == 'true':
+            return True
+        if node.id == 'false':
+            return False
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [_literal(e) for e in node.elts]
+    if isinstance(node, ast.Dict):
+        return {_literal(k): _literal(v) for k, v in zip(node.keys, node.values)}
+    return ast.literal_eval(node)
+
+
+def _build_call_args(raw, params, kinds, namespace):
+    """Match scraped example keys onto the method's parameters and convert the
+    object-typed ones. Extra keys (LeetCode's `pos` for cycle problems) are
+    consumed rather than forwarded, so the call never TypeErrors on them."""
+    list_node_cls = namespace['ListNode']
+    tree_node_cls = namespace['TreeNode']
+
+    # Only forward keys that name a real parameter. An example scraped from a
+    # different problem section binds nothing, the call raises TypeError before
+    # entering the user's body, and run_traced moves on to the next example —
+    # deliberately preferred over guessing a positional mapping, which would
+    # run the solution on silently wrong arguments.
+    matched = {k: v for k, v in raw.items() if k in params}
+    extras = {k: v for k, v in raw.items() if k not in params}
+
+    args = {}
+    for name, value in matched.items():
+        kind = kinds.get(name)
+        if kind == 'list_node':
+            args[name] = _to_list_node(value, list_node_cls)
+        elif kind == 'tree_node':
+            args[name] = _to_tree_node(value, tree_node_cls)
+        elif kind == 'list_of_list_node':
+            args[name] = [_to_list_node(v, list_node_cls) for v in (value or [])]
+        elif kind == 'list_of_tree_node':
+            args[name] = [_to_tree_node(v, tree_node_cls) for v in (value or [])]
+        else:
+            args[name] = value
+
+    # `pos` is the cycle index in "Linked List Cycle"-family problems and is
+    # never a real parameter — apply it to the linked-list argument instead.
+    if 'pos' in extras:
+        for name, kind in kinds.items():
+            if kind == 'list_node' and name in args:
+                args[name] = _link_cycle(args[name], extras['pos'])
+                break
+
+    return args
+
+
+def _find_solution_method(tree):
+    """(method_name, fn_node) for Solution's first public method, or None when
+    the code has no Solution class or already calls something itself."""
+    sol_class = None
+    has_top_level_call = False
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == 'Solution':
+            sol_class = node
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            has_top_level_call = True
+        elif isinstance(node, (ast.Assign, ast.AugAssign)) and isinstance(
+            getattr(node, 'value', None), ast.Call
+        ):
+            has_top_level_call = True
+
+    if has_top_level_call or sol_class is None:
+        return None
+
+    for node in sol_class.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith('_'):
+            return node.name, node
+
+    return None
+
+
+def _build_arg_candidates(code_string, examples, namespace):
+    """One entry per usable example: (method_name, kwargs). Empty when the code
+    can't be auto-run — the caller then executes the code as-is."""
+    try:
+        tree = ast.parse(code_string)
+    except SyntaxError:
+        return []
+
+    found = _find_solution_method(tree)
+    if found is None:
+        return []
+
+    method_name, fn_node = found
+    params, kinds = _method_signature(fn_node)
+
+    candidates = []
+    for example in (examples or []):
+        raw = _parse_example(example)
+        if raw is None:
+            continue
+        try:
+            candidates.append((method_name, _build_call_args(raw, params, kinds, namespace)))
+        except Exception:
+            continue
+    return candidates
+
+
+# --------------------------------------------------------------------------
+# Error reporting
+# --------------------------------------------------------------------------
+
+def _deepest_user_line(tb, max_line):
+    """Deepest traceback line that lies inside the user's own code.
+
+    Bug B9: the auto-injected runner stub sits past the user's last line, so an
+    unclamped result renders as "error on line 14" for a 9-line solution.
+    """
+    line = 0
+    cur = tb
+    while cur is not None:
+        if cur.tb_frame.f_code.co_filename == USER_FILENAME and cur.tb_lineno <= max_line:
+            line = cur.tb_lineno
+        cur = cur.tb_next
+
+    if line == 0:
+        cur = tb
+        while cur is not None:
+            if cur.tb_frame.f_code.co_filename == USER_FILENAME:
+                line = min(cur.tb_lineno, max_line)
+            cur = cur.tb_next
+
+    return line
+
+
+def _failed_before_entering_user_code(tb, max_line):
+    """True when the traceback never reached the user's method body — i.e. the
+    call itself failed to bind arguments, so a different example may work."""
+    cur = tb
+    while cur is not None:
+        if cur.tb_frame.f_code.co_filename == USER_FILENAME:
+            name = cur.tb_frame.f_code.co_name
+            if name != '<module>' and cur.tb_lineno <= max_line:
+                return False
+        cur = cur.tb_next
+    return True
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+
+def _reset_state():
+    global _snapshots, _prev_locals, _events, _truncated, _limit_kind
+    global _frames, _frame_seq, _stdout
+    _snapshots = []
+    _prev_locals = {}
+    _events = 0
+    _truncated = False
+    _limit_kind = None
+    _frames = {}
+    _frame_seq = 0
+    _stdout = _StdoutCapture()
+
+
+def _run_once(compiled, namespace, call):
+    """Execute compiled user code, optionally invoking `call` afterwards.
+
+    Returns (exception, return_value). The runner call happens inside the same
+    traced execution so the method body's frames are captured.
+    """
+    real_stdout = sys.stdout
+    sys.stdout = _stdout
+    sys.settrace(_tracer)
+    returned = None
+    error = None
+    try:
+        exec(compiled, namespace)
+        if call is not None:
+            method_name, kwargs = call
+            returned = getattr(namespace['Solution'](), method_name)(**kwargs)
+    except BaseException as exc:  # noqa: BLE001 - surfaced to the panel
+        error = exc
+    finally:
+        sys.settrace(None)
+        sys.stdout = real_stdout
+    return error, returned
+
+
+def run_traced(code_string, examples=None):
+    global _user_max_line
+
+    _user_max_line = code_string.count('\n') + 1
+
+    # Compile with filename '<exec>' so the tracer filter matches; exec()'s
+    # default is '<string>', which would silently reject every line event.
+    try:
+        compiled = compile(code_string, USER_FILENAME, 'exec')
+    except SyntaxError as exc:
+        return json.dumps({
+            'snapshots': [],
+            'truncated': False,
+            'limit': None,
+            'error': {
+                'message': 'SyntaxError: ' + str(exc.msg),
+                'line': min(exc.lineno or 0, _user_max_line),
+            },
+            'returnValue': None,
+        })
+
+    namespace = _build_namespace()
+    candidates = _build_arg_candidates(code_string, examples, namespace)
+
+    # Try each parseable example in turn: an argument-name mismatch TypeErrors
+    # before reaching the user's body, and the next example often binds cleanly.
+    attempts = candidates or [None]
+    error = None
+    returned = None
+    for index, call in enumerate(attempts):
+        _reset_state()
+        namespace = _build_namespace()
+        error, returned = _run_once(compiled, namespace, call)
+
+        if error is None:
+            break
+        if isinstance(error, LeetTraceLimitError):
+            break
+        is_last = index == len(attempts) - 1
+        if is_last:
+            break
+        if isinstance(error, TypeError) and _failed_before_entering_user_code(
+            getattr(error, '__traceback__', None), _user_max_line
+        ):
+            continue
+        break
+
+    result = {
+        'snapshots': _snapshots,
+        'truncated': _truncated,
+        'limit': _limit_kind,
+        'error': None,
+        'returnValue': None,
+    }
+
+    if isinstance(error, KeyboardInterrupt):
+        # Raised by the host's interrupt buffer when MAX_EXECUTION_TIME is hit.
+        result['truncated'] = True
+        result['limit'] = 'time'
+    elif error is not None and not isinstance(error, LeetTraceLimitError):
+        result['error'] = {
+            'message': type(error).__name__ + ': ' + str(error),
+            'line': _deepest_user_line(getattr(error, '__traceback__', None), _user_max_line),
+        }
+    elif error is None:
+        try:
+            result['returnValue'] = _convert_return(returned)
+        except Exception:
+            result['returnValue'] = None
+
+    return json.dumps(result)

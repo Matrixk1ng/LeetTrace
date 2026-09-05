@@ -4,7 +4,7 @@ export default defineManifest({
   manifest_version: 3,
   name: 'LeetTrace',
   version: '0.1.0',
-  permissions: ['sidePanel', 'activeTab', 'tabs', 'storage', 'offscreen'],
+  permissions: ['sidePanel', 'activeTab', 'tabs', 'storage', 'offscreen', 'scripting'],
   host_permissions: ['https://leetcode.com/*'],
   // Pyodide uses WebAssembly.instantiateStreaming, which requires
   // 'wasm-unsafe-eval' in script-src. This token is allowed by Chrome MV3

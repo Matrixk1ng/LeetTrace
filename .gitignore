@@ -25,3 +25,7 @@ public/pyodide/
 *.njsproj
 *.sln
 *.sw?
+
+# pytest
+.pytest_cache/
+__pycache__/

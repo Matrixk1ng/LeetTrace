@@ -1,5 +1,5 @@
 import type { DataStructureState } from '../../../shared/types';
-import { useTrace } from '../../store/TraceContext';
+import { useTrace } from '../../store/useTrace';
 import ArrayViz from './ArrayViz';
 import HashMapViz from './HashMapViz';
 

@@ -8,6 +8,8 @@
     "prebuild": "node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:tracer": "python -m pytest",
+    "smoke:pyodide": "node scripts/smoke-tracer.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
