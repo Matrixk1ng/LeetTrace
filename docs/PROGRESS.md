@@ -29,9 +29,11 @@
   `mockData.ts` fixture first (DESIGN.md §10). **Remove the interim
   `SEQUENCE_KINDS` fallback in `VizRouter.tsx` as each real visualizer lands.**
 - **Active branch:** `feature/m3-pointers`, stacked on `feature/m2-serialization`.
-- **Open PRs:** [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15) (base `main`),
-  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16) (base `feature/m1-hardening`),
-  M3 opens next. **None merged — ask before merging to `main`.**
+- **Open PRs (stacked, merge in order):**
+  [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15) → base `main`;
+  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16) → base `feature/m1-hardening`;
+  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) → base `feature/m2-serialization`.
+  **None merged — ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
