@@ -25,7 +25,7 @@
   registry (`_register_frame` / `_frames`), so B8 is: key `_prev_locals` by
   `info['id']` instead of using one global dict, and drop the entry on `return`.
 - **Active branch:** `feature/m1-hardening` (3 commits, not yet merged).
-- **Open PRs:** none yet — M1 is ready to open one; **ask before merging to `main`**.
+- **Open PRs:** [#15 — M1 Hardening](https://github.com/Matrixk1ng/LeetTrace/pull/15), branch `feature/m1-hardening`. **Not merged — ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates (all green on `feature/m1-hardening`)
