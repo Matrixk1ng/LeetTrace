@@ -18,6 +18,7 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
       ],
       "truncated": bool,
       "limit": "events" | "snapshots" | null,
+      "indexing": {array: {"row": [names], "col": [names]}},
       "error": {"message": str, "line": int} | null,
       "returnValue": <serialized> | null
     }
@@ -168,18 +169,32 @@ def _serialize(v, _depth=0):
     if (hasattr(v, 'val') and hasattr(v, 'next')
             and not hasattr(v, 'left') and not hasattr(v, 'right')):
         nodes = []
+        # Node identities, so the TS side can tell that `slow` points at index 2
+        # of `head` rather than being a separate three-node list of its own.
+        # Stringified because id() is a machine address and can exceed 2**53,
+        # which JSON numbers can't carry losslessly into JS.
+        node_ids = []
         seen = set()
         cur = v
         has_cycle = False
+        cycle_index = -1
         while cur is not None:
             node_id = id(cur)
             if node_id in seen:
                 has_cycle = True
+                cycle_index = node_ids.index(str(node_id))
                 break
             seen.add(node_id)
+            node_ids.append(str(node_id))
             nodes.append(_serialize(cur.val))
             cur = cur.next
-        return {'__type': 'linked_list', 'nodes': nodes, 'has_cycle': has_cycle}
+        return {
+            '__type': 'linked_list',
+            'nodes': nodes,
+            'nodeIds': node_ids,
+            'has_cycle': has_cycle,
+            'cycleIndex': cycle_index,
+        }
 
     if hasattr(v, 'val') and hasattr(v, 'left') and hasattr(v, 'right'):
         if _depth > 10:
@@ -193,6 +208,7 @@ def _serialize_tree_node(node, depth=0):
     if node is None or depth > 10:
         return None
     return {
+        'id': str(id(node)),
         'val': _serialize(node.val),
         'left': _serialize_tree_node(getattr(node, 'left', None), depth + 1),
         'right': _serialize_tree_node(getattr(node, 'right', None), depth + 1),
@@ -308,6 +324,197 @@ def _analyze_usage(tree):
                 heaps.add(node.args[0].id)
 
     return {'heap': heaps, 'stack': (appended & popped) - heaps}
+
+
+# Conventional pointer names. Used only to extend an association that static
+# analysis already established — never to invent one — so `target = 9` still
+# can't become an arrow on a 15-element array (bug B3).
+_POINTER_NAMES = frozenset({
+    'i', 'j', 'k', 'l', 'r', 'lo', 'hi', 'left', 'right', 'mid',
+    'slow', 'fast', 'start', 'end',
+})
+
+
+# Fields holding type annotations. `List[int]` is a Subscript just like
+# `nums[i]`, so walking into these would record `int` as an index of `List`.
+_ANNOTATION_FIELDS = {
+    ast.FunctionDef: ('returns',),
+    ast.AsyncFunctionDef: ('returns',),
+    ast.arg: ('annotation',),
+    ast.AnnAssign: ('annotation',),
+}
+
+
+def _walk_code(node):
+    """ast.walk, but skipping annotations — they aren't executable code."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        skip = _ANNOTATION_FIELDS.get(type(current), ())
+        for field, value in ast.iter_fields(current):
+            if field in skip:
+                continue
+            if isinstance(value, list):
+                stack.extend(v for v in value if isinstance(v, ast.AST))
+            elif isinstance(value, ast.AST):
+                stack.append(value)
+
+
+def _names_in(node):
+    """Every Name id appearing in an expression."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _len_arg(node):
+    """`len(x)` -> 'x', else None."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'len' and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)):
+        return node.args[0].id
+    return None
+
+
+def _record(mapping, array, index, axis):
+    if not array or not index or array == index:
+        return
+    entry = mapping.setdefault(array, {'row': [], 'col': []})
+    if index not in entry[axis]:
+        entry[axis].append(index)
+
+
+def _slice_name(node):
+    """The variable a subscript indexes by, when the slice is just that name.
+
+    `nums[i]` is direct evidence that `i` indexes `nums`. `nums[r - k]` is not
+    evidence about `k` — it's evidence about the *expression*. Compound slices
+    are handled separately, contributing only names already known for that
+    array, so a window size can't become an arrow.
+    """
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _analyze_indexing(tree):
+    """Map each array name to the variables that actually index it (bug B3).
+
+    The old heuristic made *every* in-range int a pointer on *every* array, so
+    `target = 9` rendered as an arrow on a 15-element `nums` and counters like
+    `n`/`total` showed up as pointers. Only these signals count:
+
+      * ``arr[i]`` / ``arr[i + 1]``      — a real subscript
+      * ``arr[i][j]``                    — i is a row axis, j a column axis
+      * ``while i < len(arr)``           — a bound comparison
+      * ``for i in range(len(arr))``     — a range over the array
+
+    Returns ``{array: {'row': [names], 'col': [names]}}``. For a flat array
+    everything lands in 'row'; 'col' is only populated by 2-D subscripts.
+    """
+    mapping = {}
+    # (array, axis, names) for slices that aren't a bare name — replayed once
+    # the strong signals are in, so `nums[r - k]` can reinforce `r` without
+    # inventing `k`.
+    compound = []
+
+    for node in _walk_code(tree):
+        # arr[i] and arr[i][j]
+        if isinstance(node, ast.Subscript):
+            inner = node.value
+            if isinstance(inner, ast.Name):
+                _record(mapping, inner.id, _slice_name(node.slice), 'row')
+                compound.append((inner.id, 'row', _names_in(node.slice)))
+            elif isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name):
+                array = inner.value.id
+                _record(mapping, array, _slice_name(inner.slice), 'row')
+                _record(mapping, array, _slice_name(node.slice), 'col')
+                compound.append((array, 'row', _names_in(inner.slice)))
+                compound.append((array, 'col', _names_in(node.slice)))
+
+        # while i < len(arr) / if lo <= len(arr) - 1
+        elif isinstance(node, ast.Compare):
+            operands = [node.left] + list(node.comparators)
+            arrays = [a for a in (_len_arg(o) for o in _walk_len(operands)) if a]
+            if arrays:
+                for operand in operands:
+                    if isinstance(operand, ast.Name):
+                        for array in arrays:
+                            _record(mapping, array, operand.id, 'row')
+
+        # for i in range(len(arr)) / range(1, len(arr))
+        elif isinstance(node, ast.For):
+            if isinstance(node.target, ast.Name) and isinstance(node.iter, ast.Call):
+                call = node.iter
+                if isinstance(call.func, ast.Name) and call.func.id == 'range':
+                    for arg in call.args:
+                        for sub_node in ast.walk(arg):
+                            array = _len_arg(sub_node)
+                            if array:
+                                _record(mapping, array, node.target.id, 'row')
+
+    for array, axis, names in compound:
+        axes = mapping.get(array)
+        if not axes:
+            continue
+        for name in names:
+            if name in axes['row'] or name in axes['col']:
+                _record(mapping, array, name, axis)
+
+    _extend_with_companions(tree, mapping)
+    return mapping
+
+
+def _walk_len(operands):
+    """Every sub-expression of the operands, so `len(arr) - 1` still counts."""
+    for operand in operands:
+        for node in ast.walk(operand):
+            yield node
+
+
+def _extend_with_companions(tree, mapping):
+    """Attach the other half of a two-pointer loop.
+
+    In `while left < right: ... nums[left] ...` only `left` subscripts `nums`,
+    but `right` is plainly a pointer on the same array. Extend the association
+    across a direct comparison — but only for conventional pointer names, so a
+    `while i < target` can't turn `target` into an arrow.
+    """
+    groups = []
+
+    for node in _walk_code(tree):
+        # `while left < right` — both sides move over the same array.
+        if isinstance(node, ast.Compare):
+            operands = [node.left] + list(node.comparators)
+            names = [o.id for o in operands if isinstance(o, ast.Name)]
+            if len(names) >= 2:
+                groups.append(names)
+
+        # `mid = (lo + hi) // 2`, `lo = mid + 1` — the classic binary search
+        # shape, where only `mid` ever subscripts the array.
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            target_names = [t.id for t in targets if isinstance(t, ast.Name)]
+            value = getattr(node, 'value', None)
+            if target_names and value is not None:
+                groups.append(target_names + sorted(_names_in(value)))
+
+    # A name joins an array's axis when it is grouped with a name already on
+    # that axis. Repeat until nothing new is learned: `mid` teaches `lo` and
+    # `hi` in one pass, and `lo = mid + 1` can then teach further names.
+    for _ in range(4):
+        changed = False
+        for axes in mapping.values():
+            for axis in ('row', 'col'):
+                known = axes[axis]
+                if not known:
+                    continue
+                for group in groups:
+                    if not any(n in known for n in group):
+                        continue
+                    for name in group:
+                        if name not in known and name in _POINTER_NAMES:
+                            known.append(name)
+                            changed = True
+        if not changed:
+            break
 
 
 def _usage_kind(name, value):
@@ -862,6 +1069,7 @@ def run_traced(code_string, examples=None):
             'snapshots': [],
             'truncated': False,
             'limit': None,
+            'indexing': {},
             'error': {
                 'message': 'SyntaxError: ' + str(exc.msg),
                 'line': min(exc.lineno or 0, _user_max_line),
@@ -875,6 +1083,7 @@ def run_traced(code_string, examples=None):
         tree = None
 
     _usage = _analyze_usage(tree) if tree is not None else {}
+    indexing = _analyze_indexing(tree) if tree is not None else {}
 
     namespace = _build_namespace()
     candidates = _build_arg_candidates(tree, examples, namespace)
@@ -908,6 +1117,10 @@ def run_traced(code_string, examples=None):
         'limit': _limit_kind,
         'error': None,
         'returnValue': None,
+        # {array: {row: [names], col: [names]}} — which variables actually
+        # index which arrays. The TS side builds pointers from this instead of
+        # treating every in-range int as an index (bug B3).
+        'indexing': indexing,
     }
 
     if isinstance(error, KeyboardInterrupt):

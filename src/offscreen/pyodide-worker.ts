@@ -17,7 +17,11 @@
 import tracerSource from './tracer.py?raw';
 import { MAX_EVENTS, MAX_SNAPSHOTS } from '../shared/constants';
 import type { ExecutionError, TraceResult, WorkerRequest, WorkerResponse } from '../shared/types';
-import { processSnapshot, type RawTraceResult } from './snapshot-builder';
+import {
+  createTraceContext,
+  processSnapshot,
+  type RawTraceResult,
+} from './snapshot-builder';
 import { detectPattern } from './pattern-detect';
 
 interface PyodideInstance {
@@ -92,8 +96,12 @@ function execute(code: string, examples: string[]): TraceResult | ExecutionError
     return { error: raw.error.message, line: raw.error.line };
   }
 
+  // One context for the whole trace: pointer colours must stay fixed per name
+  // across every step (bug B3), so the assigner can't be per-snapshot.
+  const context = createTraceContext(raw.indexing);
+
   return {
-    snapshots: raw.snapshots.map(processSnapshot),
+    snapshots: raw.snapshots.map((snapshot) => processSnapshot(snapshot, context)),
     pattern: detectPattern(code),
     truncated: raw.truncated,
     ...(raw.limit ? { limit: raw.limit } : {}),

@@ -1,6 +1,6 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** v1.2 · 2026-09-04 (M1 + M2 landed; §3, §5, §6 and §10 reflect what shipped)
+**Status:** v1.3 · 2026-09-04 (M1–M3 landed; §2–§6 and §10 reflect what shipped)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
@@ -39,7 +39,7 @@ Ordered by severity. File references are to current `main`.
 
 - **B3 — Pointer inference is wrong: every in-range int becomes a pointer on every array.**
   [pyodide-runner.ts:422-445](../src/offscreen/pyodide-runner.ts): for each `int` variable, a pointer is pushed onto **every** array where the value is a valid index. So `target = 9` renders as an arrow on a 15-element `nums`, counters/lengths (`n`, `count`, `total`) show as pointers, and the same variable gets different colors on different arrays (`colorIdx++` per attach).
-  **Fix:** only treat a variable as a pointer for arrays it actually indexes — do a static pass over the user code for `arr[i]`, `arr[i+1]`, `while i < len(arr)` patterns to build a `{array → pointer names}` map (plus a small allowlist: `i, j, k, l, r, lo, hi, left, right, mid, slow, fast, start, end`). Assign each pointer name a **stable color** for the whole trace, not per-snapshot.
+  **Fix (landed M3):** `_analyze_indexing` builds `{array: {row: [names], col: [names]}}` from the AST — bare-name subscripts (`arr[i]`), 2-D subscripts (`grid[i][j]`, outer = row axis, inner = column axis), bound comparisons (`while i < len(arr)`) and `for i in range(len(arr))`. Two things this must get right: **annotations are skipped** (`List[int]` is an `ast.Subscript` just like `nums[i]`), and **compound slices don't invent indices** (`nums[r - k]` is evidence about the expression, not about `k`; compound slices may only reinforce names already known for that array). The conventional-name allowlist (`i, j, k, l, r, lo, hi, left, right, mid, slow, fast, start, end`) only *extends* an association static analysis already found, propagated to a fixpoint through comparisons and assignments — never invents one. That is what makes binary search work (`mid` subscripts, `mid = (lo + hi) // 2` carries it to `lo`/`hi`) while `while i < target` still can't make `target` an arrow. Colours come from `createColorAssigner`, one per name for the whole trace.
 
 - **B4 — BFS/queue/counter problems visualize as garbage strings.**
   `_serialize` handles `deque` implicitly? No — `deque` is not a `list`/`dict` subclass, has no `val/next`, so it falls through to `repr(v)`. `Counter`/`defaultdict`/`OrderedDict` **do** serialize (dict subclass) but their Python type names are `Counter`/`defaultdict`, and `buildDataStructure` only matches `type === 'dict'` and `type === 'list'` ([pyodide-runner.ts:475-491](../src/offscreen/pyodide-runner.ts)) — so none of them get a visualizer. Same for `set` (serialized as list, type `'set'`) and `tuple`.
@@ -150,7 +150,10 @@ type StructureKind =
   | 'array' | 'string' | 'matrix' | 'hashmap' | 'set'
   | 'linked_list' | 'tree' | 'stack' | 'queue' | 'heap' | 'graph';
 
-interface Pointer { name: string; index: number; cell?: { row, col }; color: string }  // arrays; `cell` set for matrices
+// Arrays: `index` is the position. Matrices: one pointer per axis variable,
+// with `cell` marking which axis it moves along (-1 on the other), and a
+// `current` highlight on the flattened crossing cell.
+interface Pointer { name: string; index: number; cell?: { row: number; col: number }; color: string }
 interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order)
 ```
 

@@ -71,7 +71,11 @@ export interface DataStructureState {
 export interface Pointer {
   name: string;
   index: number;
-  /** Set for matrix pointers; `index` then addresses the flattened cell. */
+  /**
+   * Set for matrix pointers, saying which axis this cursor moves along:
+   * `col === -1` is a row cursor, `row === -1` a column cursor. `index` is the
+   * position on that axis. A cell highlight marks where the two cross.
+   */
   cell?: { row: number; col: number };
   color: string;
 }
