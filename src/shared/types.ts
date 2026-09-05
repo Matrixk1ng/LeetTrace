@@ -33,8 +33,14 @@ export interface VariableState {
   value: unknown;
   /** Python type name: "int", "list", "dict", "TreeNode", "ListNode", … */
   type: string;
-  /** Did this variable change on this step? */
+  /** Did this variable change on this step, within its own frame? */
   changed: boolean;
+  /**
+   * Usage-derived structure hint from the tracer's static pass. A heap and a
+   * stack are both `list` at runtime, so only how the code uses the name can
+   * tell them apart. Absent when nothing was inferred.
+   */
+  kind?: 'heap' | 'stack';
 }
 
 export type StructureKind =

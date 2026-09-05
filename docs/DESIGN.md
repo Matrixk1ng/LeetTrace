@@ -1,6 +1,6 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** v1.1 · 2026-09-04 (M1 landed; §5, §6 and §10 reflect what shipped)
+**Status:** v1.2 · 2026-09-04 (M1 + M2 landed; §3, §5, §6 and §10 reflect what shipped)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
@@ -43,7 +43,7 @@ Ordered by severity. File references are to current `main`.
 
 - **B4 — BFS/queue/counter problems visualize as garbage strings.**
   `_serialize` handles `deque` implicitly? No — `deque` is not a `list`/`dict` subclass, has no `val/next`, so it falls through to `repr(v)`. `Counter`/`defaultdict`/`OrderedDict` **do** serialize (dict subclass) but their Python type names are `Counter`/`defaultdict`, and `buildDataStructure` only matches `type === 'dict'` and `type === 'list'` ([pyodide-runner.ts:475-491](../src/offscreen/pyodide-runner.ts)) — so none of them get a visualizer. Same for `set` (serialized as list, type `'set'`) and `tuple`.
-  **Fix:** serialize with an explicit `__type` tag for `deque`/`set`/`heap-like list`; in `buildDataStructure`, match on a *family* (`dict-like`, `list-like`, `set`, `deque`) instead of exact type names.
+  **Fix (landed M2):** `_serialize` emits `{__type: 'deque', items}` and `{__type: 'set', items, frozen}`; `buildDataStructure` matches on a *family* (`DICT_LIKE_TYPES`, `LIST_LIKE_TYPES`) instead of exact type names. Heap and stack are both plain `list` at runtime, so they can't be tagged from the value — a static `_analyze_usage` pass infers them from the AST (heap: first argument to a `heapq.*` call; stack: a name given both `.append(x)` and a no-argument `.pop()`) and the result rides on an optional `kind` field on the variable rather than inside the value.
 
 - **B5 — Gutter maps to the wrong line whenever the editor is scrolled.**
   [gutter.ts:42-50](../src/content/gutter.ts) sorts the *rendered* `.view-line` nodes by `top` and indexes with the snapshot line number — but Monaco virtualizes: it only renders visible lines, so index N of the visible set ≠ document line N unless the editor is scrolled to the top. Long solutions get highlights on the wrong lines.
@@ -89,14 +89,14 @@ LeetTrace v1.0 is done when, for any LeetCode problem solvable with a Python `So
 |---|---|---|---|---|
 | Array / list | ✅ | ✅ | ✅ ArrayViz | Done (fix B3 pointers) |
 | String (as sequence) | type `str` | as char array when indexed/pointed | ArrayViz variant | **New** |
-| HashMap / dict / Counter / defaultdict | dict only | ✅ | ✅ HashMapViz | Extend to dict-likes (B4); add changed-value highlight (B17) |
-| Set / frozenset | ❌ | list w/ type `set` | SetViz (chip cloud, add/remove diff) | **New** |
-| Matrix / 2-D grid | partial (B13) | ✅ | MatrixViz (grid, row/col pointers, cell highlights) | **New** |
+| HashMap / dict / Counter / defaultdict | ✅ (M2) dict *family* | ✅ | ✅ HashMapViz | Dict-likes routed (M2); changed-value highlight still open (B17, M4) |
+| Set / frozenset | ✅ (M2) | `{__type: 'set', items, frozen}` | SetViz (chip cloud, add/remove diff) | Serialized + routed (M2); viz **new** |
+| Matrix / 2-D grid | ✅ (M2, B13 fixed) | ✅ | MatrixViz (grid, row/col pointers, cell highlights) | Detection fixed (M2); viz **new** |
 | Linked list (`ListNode`) | ✅ | ✅ (+cycle flag) | LinkedListViz (node chain, `slow`/`fast`/`curr` node pointers, cycle indicator) | **New**; needs B2 input building |
 | Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped) | TreeViz (SVG top-down layout, current-node highlight, path trail) | **New**; needs B2 input building |
-| Stack (list used LIFO) | usage heuristic (`append`+`pop()`) | list | StackViz (vertical, top emphasized, push/pop animation) | **New** |
-| Queue / deque | ❌ (B4) | `__type: deque` | QueueViz (horizontal, front/back labels, popleft/append animation) | **New** |
-| Heap (list via `heapq`) | `heapq.*` calls on the var | list + `__type: heap` | HeapViz (implicit tree or bar view, min at root) | **New** |
+| Stack (list used LIFO) | ✅ (M2) AST usage: `append` + no-arg `pop()` | list + `kind: 'stack'` | StackViz (vertical, top emphasized, push/pop animation) | Detected + routed (M2); viz **new** |
+| Queue / deque | ✅ (M2) | `{__type: 'deque', items}` | QueueViz (horizontal, front/back labels, popleft/append animation) | Serialized + routed (M2); viz **new** |
+| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); viz **new** |
 | Graph (adjacency dict/list) | dict of lists w/ node-like keys, or `defaultdict(list)` | dict | GraphViz (force/ring layout, visited coloring) | **New — stretch, ship last** |
 | Recursion / call stack | `call`/`return` events | frame list (name, line, args) | CallStackViz (frame stack; powers DFS/backtracking) | **New** |
 
@@ -150,7 +150,7 @@ type StructureKind =
   | 'array' | 'string' | 'matrix' | 'hashmap' | 'set'
   | 'linked_list' | 'tree' | 'stack' | 'queue' | 'heap' | 'graph';
 
-interface Pointer { name: string; index: number; color: string }        // arrays/matrix (matrix: {row, col})
+interface Pointer { name: string; index: number; cell?: { row, col }; color: string }  // arrays; `cell` set for matrices
 interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order)
 ```
 

@@ -14,7 +14,7 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
     {
       "snapshots": [
         {"step", "line", "event", "frameId", "frameName", "callDepth",
-         "variables": {name: {"value", "type", "changed"}}, "stdout"?}
+         "variables": {name: {"value", "type", "changed", "kind"?}}, "stdout"?}
       ],
       "truncated": bool,
       "limit": "events" | "snapshots" | null,
@@ -24,6 +24,7 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
 """
 
 import ast
+import collections
 import json
 import sys
 
@@ -85,7 +86,11 @@ _BASELINE_NAMES = frozenset({
 # --------------------------------------------------------------------------
 
 _snapshots = []
+# {frameId: {name: repr}} — previous locals per frame, so `changed` compares a
+# frame against its own last step rather than whichever frame ran most recently
+# (bug B8). Recursion and helper calls used to flip each other's flags.
 _prev_locals = {}
+_usage = {}
 _user_max_line = 10 ** 9
 _events = 0
 _truncated = False
@@ -141,11 +146,24 @@ def _serialize(v, _depth=0):
     if isinstance(v, dict):
         return {str(k): _serialize(val, _depth + 1) for k, val in v.items()}
 
+    if isinstance(v, collections.deque):
+        # deque is not a list subclass and has no val/next, so without this it
+        # fell through to repr() and rendered as a garbage string (bug B4).
+        return {
+            '__type': 'deque',
+            'items': [_serialize(x, _depth + 1) for x in v],
+        }
+
     if isinstance(v, (set, frozenset)):
         try:
-            return sorted([_serialize(x, _depth + 1) for x in v], key=str)
+            items = sorted([_serialize(x, _depth + 1) for x in v], key=str)
         except Exception:
-            return [_serialize(x, _depth + 1) for x in v]
+            items = [_serialize(x, _depth + 1) for x in v]
+        return {
+            '__type': 'set',
+            'items': items,
+            'frozen': isinstance(v, frozenset),
+        }
 
     if (hasattr(v, 'val') and hasattr(v, 'next')
             and not hasattr(v, 'left') and not hasattr(v, 'right')):
@@ -221,17 +239,22 @@ def _is_class_body(frame):
     return not (frame.f_code.co_flags & 0x1) and frame.f_code.co_name != '<module>'
 
 
-def _collect_locals(frame):
+def _collect_locals(frame, frame_id):
+    previous = _prev_locals.get(frame_id, {})
     current = {}
     for k, v in frame.f_locals.items():
         if k.startswith('_') or k in _BASELINE_NAMES:
             continue
         try:
-            current[k] = {
+            entry = {
                 'value': _serialize(v),
                 'type': type(v).__name__,
-                'changed': k not in _prev_locals or _prev_locals.get(k) != repr(v),
+                'changed': k not in previous or previous.get(k) != repr(v),
             }
+            kind = _usage_kind(k, v)
+            if kind:
+                entry['kind'] = kind
+            current[k] = entry
         except Exception:
             current[k] = {
                 'value': repr(v),
@@ -241,8 +264,69 @@ def _collect_locals(frame):
     return current
 
 
+def _remember_locals(frame, frame_id):
+    _prev_locals[frame_id] = {
+        k: repr(v) for k, v in frame.f_locals.items()
+        if not k.startswith('_') and k not in _BASELINE_NAMES
+    }
+
+
+_HEAPQ_FUNCS = frozenset({
+    'heappush', 'heappop', 'heapify', 'heappushpop', 'heapreplace',
+})
+
+
+def _analyze_usage(tree):
+    """Static pass over the user's code for structures a value can't reveal.
+
+    A heap and a stack are both just `list` at runtime — only how the code
+    uses them says which is which, so it has to be read off the AST:
+      * heap  — the name is the first argument to a heapq.* call
+      * stack — the name gets both .append(x) and a no-argument .pop()
+                (a .pop(0) is queue-like, so it doesn't count)
+    """
+    heaps = set()
+    appended = set()
+    popped = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+
+        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+            if fn.value.id == 'heapq' and fn.attr in _HEAPQ_FUNCS:
+                if node.args and isinstance(node.args[0], ast.Name):
+                    heaps.add(node.args[0].id)
+            elif fn.attr == 'append':
+                appended.add(fn.value.id)
+            elif fn.attr == 'pop' and not node.args:
+                popped.add(fn.value.id)
+        elif isinstance(fn, ast.Name) and fn.id in _HEAPQ_FUNCS:
+            # from heapq import heappush
+            if node.args and isinstance(node.args[0], ast.Name):
+                heaps.add(node.args[0].id)
+
+    return {'heap': heaps, 'stack': (appended & popped) - heaps}
+
+
+def _usage_kind(name, value):
+    """Usage-derived kind for a variable, or None.
+
+    Only meaningful for plain lists — the name could have been rebound to
+    something else by the time this step runs.
+    """
+    if not isinstance(value, list):
+        return None
+    if name in _usage.get('heap', ()):
+        return 'heap'
+    if name in _usage.get('stack', ()):
+        return 'stack'
+    return None
+
+
 def _tracer(frame, event, arg):
-    global _prev_locals, _events, _truncated, _limit_kind
+    global _events, _truncated, _limit_kind
 
     if frame.f_code.co_filename != USER_FILENAME:
         return None
@@ -291,7 +375,7 @@ def _tracer(frame, event, arg):
             'Stopped after ' + str(MAX_SNAPSHOTS) + ' steps.'
         )
 
-    current_locals = _collect_locals(frame)
+    current_locals = _collect_locals(frame, info['id'])
 
     if event == 'return':
         # Surface the returned value as a synthetic 'return' variable so the
@@ -332,14 +416,11 @@ def _tracer(frame, event, arg):
             snapshot['stdout'] = emitted
 
     _snapshots.append(snapshot)
-
-    _prev_locals = {
-        k: repr(v) for k, v in frame.f_locals.items()
-        if not k.startswith('_') and k not in _BASELINE_NAMES
-    }
+    _remember_locals(frame, info['id'])
 
     if event == 'return':
         _frames.pop(id(frame), None)
+        _prev_locals.pop(info['id'], None)
 
     return _tracer
 
@@ -661,12 +742,10 @@ def _find_solution_method(tree):
     return None
 
 
-def _build_arg_candidates(code_string, examples, namespace):
+def _build_arg_candidates(tree, examples, namespace):
     """One entry per usable example: (method_name, kwargs). Empty when the code
     can't be auto-run — the caller then executes the code as-is."""
-    try:
-        tree = ast.parse(code_string)
-    except SyntaxError:
+    if tree is None:
         return []
 
     found = _find_solution_method(tree)
@@ -770,7 +849,7 @@ def _run_once(compiled, namespace, call):
 
 
 def run_traced(code_string, examples=None):
-    global _user_max_line
+    global _user_max_line, _usage
 
     _user_max_line = code_string.count('\n') + 1
 
@@ -790,8 +869,15 @@ def run_traced(code_string, examples=None):
             'returnValue': None,
         })
 
+    try:
+        tree = ast.parse(code_string)
+    except SyntaxError:
+        tree = None
+
+    _usage = _analyze_usage(tree) if tree is not None else {}
+
     namespace = _build_namespace()
-    candidates = _build_arg_candidates(code_string, examples, namespace)
+    candidates = _build_arg_candidates(tree, examples, namespace)
 
     # Try each parseable example in turn: an argument-name mismatch TypeErrors
     # before reaching the user's body, and the next example often binds cleanly.
