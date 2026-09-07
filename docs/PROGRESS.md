@@ -28,12 +28,13 @@
   `src/panel/components/visualizers/mockData.ts`. Build against them, check the
   result with `npm run gallery`, then route both in `VizRouter.tsx` — they are
   the last two kinds still falling through to the JSON dump.
-- **Active branch:** `feature/m4-visualizers`, stacked on `feature/m3-pointers`.
-- **Open PRs (stacked, merge in order):**
-  [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15) → base `main`;
-  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16) → base `feature/m1-hardening`;
-  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) → base `feature/m2-serialization`;
-  M4 opens next. **None merged — ask before merging to `main`.**
+- **Active branch:** `feature/m4-visualizers`, off `main`.
+- **Merged:** [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15),
+  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16),
+  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) are all on `main`
+  as of 2026-09-05. Milestone branches are no longer stacked — branch M5 off
+  `main`.
+- **Open PRs:** M4 opens next, base `main`. **Ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
