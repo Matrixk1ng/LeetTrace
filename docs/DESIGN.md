@@ -230,6 +230,20 @@ AST analysis ignores comments/strings by construction, killing the current false
 
 ---
 
+## Selected testcase input and feedback (2026-09-07)
+
+The content script reads the selected LeetCode testcase, including custom cases
+created with +, instead of description examples. Each Trace sends exactly one
+named-argument input. Case selection/value changes debounce an automatic retrace
+after the user has traced once; an in-flight run finishes but its superseded result
+is discarded. Unreadable selected inputs fail explicitly. The panel displays the
+traced case and its exact input. Chrome/LeetCode live integration still needs testing.
+
+A pinned footer opens public GitHub issue forms for bugs/features. Users review
+and submit on GitHub; only extension version is prefilled automatically. No backend
+or credentials are embedded. This extends custom input support on the LeetCode
+page; a custom-input editor inside the panel remains outside v1 scope.
+
 ## 8. UI/UX implementation
 
 The following list is implemented. Runtime errors carry optional partial

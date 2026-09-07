@@ -73,12 +73,13 @@ const bst: Snapshot = {
 function Gallery() {
   return (
     <div style={{ width: 400 }}>
-      <TraceContext.Provider value={{state: {...initialState, status: 'paused',
+      <div className="panel-preview"><TraceContext.Provider value={{state: {...initialState, status: 'paused',
+        testCase: {label: 'Case 1', input: 'root = [2,1,3]'},
         snapshots: Array.from({length: 38}, () => bst), currentStep: 37, totalSteps: 38, returnValue: true,
         detectedPattern: {type: 'dfs', confidence: .66, description: 'Explores subproblems through recursive calls.'}},
         dispatch: () => {}}}>
         <App />
-      </TraceContext.Provider>
+      </TraceContext.Provider></div>
       <Card title="nums — array" note="two cursors, stable colours">
         <ArrayViz dataStructure={mock.mockArray} highlights={[]} />
       </Card>
@@ -198,6 +199,7 @@ it('writes the visualizer gallery', () => {
 <style>${css}</style>
 <style>
   body { margin: 0; padding: 20px; background: #1a1a2e; font-family: system-ui, sans-serif; }
+  .panel-preview > div { height: 900px; margin-bottom: 20px; }
   .missing-css { color: #f87171; font: 13px system-ui; margin-bottom: 16px; }
 </style>
 </head>

@@ -36,7 +36,7 @@ it('refuses to guess the first example when the testcase pane is hidden', async 
 });
 it('keeps the Python solution selected when a testcase Monaco editor has focus', () => {
   document.body.innerHTML = '<div id="solution"></div><div id="testcase"><textarea></textarea></div>';
-  const source = readFileSync(new URL('../../public/monaco-bridge.js', import.meta.url), 'utf8');
+  const source = readFileSync('public/monaco-bridge.js', 'utf8');
   const script = document.createElement('script');
   script.setAttribute('data-request-id','test');
   vi.spyOn(document,'currentScript','get').mockReturnValue(script);

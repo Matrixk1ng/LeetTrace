@@ -32,12 +32,36 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 105 passed |
-| `npm run test:tracer` (pytest) | 116 passed |
+| `npm test` (vitest) | 116 passed |
+| `npm run test:tracer` (pytest) | 119 passed |
 | `npm run smoke:pyodide` | all pass |
 | `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### 2026-09-07 — Selected/custom testcases and feedback
+
+- Read visible named testcase fields, including textareas, inputs, contenteditable/
+  CodeMirror lines, and display boxes. Selected tab detection uses ARIA/data state
+  and LeetCode's active styling. No description-example fallback: unreadable cases
+  show an actionable error. Preserve input whitespace and linked-list `pos`.
+- Watch case switches, plus-added cases, and custom edits. After the first Trace,
+  debounce automatic retracing; queue the latest selection if a run is in flight
+  and discard its superseded result. Show the traced case label and exact inputs.
+- Prefer Python Monaco models even when a separate testcase editor has focus.
+  Invalid literals now produce an error rather than silently executing no call.
+- Added pinned feedback footer with user-reviewed bug/feature GitHub forms.
+  Verified repository public and Issues enabled; no reports submitted. Forms only
+  prefill extension version, not code/input data. README explains Issues and email
+  notifications; no extension backend or token required.
+- Checks: 116 TS / 119 Python tests, lint/build, Pyodide smoke and gallery.
+  DOM fixtures include the supplied head/pos screenshot layout, generic div tabs,
+  dynamic custom cases, hidden panes, and focused testcase editors.
+- Live check: reload extension and LeetCode; select Case 2, then +/Case 3, change
+  head/pos, and confirm automatic retracing and the panel's input disclosure.
+  Check feedback opens the appropriate GitHub form without submitting it.
+- Changes remain local and uncommitted on `feature/trace-experience`.
+
 
 ### 2026-09-07 — M6–M8 implementation and readable trace experience
 

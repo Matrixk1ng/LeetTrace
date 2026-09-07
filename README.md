@@ -1,6 +1,6 @@
 # LeetTrace
 
-LeetTrace is a Chrome extension for stepping through LeetCode Python solutions beside the editor. It runs a scraped example locally in Pyodide and shows how variables, data structures, and function calls change.
+LeetTrace is a Chrome extension for stepping through LeetCode Python solutions beside the editor. It runs the selected LeetCode testcase locally in Pyodide and shows how variables, data structures, and function calls change.
 
 ## What is implemented
 
@@ -26,9 +26,40 @@ Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and
 
 After changing code, rebuild and reload the extension. Reload the LeetCode tab if testing content-script or Monaco-bridge changes. `npm run dev` starts the Vite development server.
 
+## Testcases and custom inputs
+
+Open LeetCode's **Testcase** tab, select a case, and click **Trace** once.
+After that, changing cases or editing inputs automatically retraces after a short
+pause. Cases added with LeetCode's **+** button work the same way. The panel shows
+**Tracing Case N** and an expandable copy of the exact input.
+
+Keep the Testcase pane open when starting a trace. If the selected inputs are
+unreadable or incomplete, LeetTrace reports an error instead of running a
+different example. It reads visible named fields (including linked-list `pos`)
+and preserves multiline values and whitespace inside strings. Live LeetCode
+selector compatibility still needs checking after page layout changes.
+
+## Receiving bug reports and feature requests
+
+The pinned **Feature request / Report a bug** button opens prefilled GitHub issue
+forms in [Matrixk1ng/LeetTrace](https://github.com/Matrixk1ng/LeetTrace/issues).
+The repository is public and Issues was verified enabled on 2026-09-07.
+
+Users sign into GitHub, review the form, and submit it. You receive each report
+in the repository's **Issues** tab, where you can reply, label, and close it.
+To receive alerts, choose **Watch → Custom → Issues** on the repository, then
+enable email under [GitHub notification settings](https://github.com/settings/notifications).
+See [GitHub's notification guide](https://docs.github.com/en/subscriptions-and-notifications/get-started/configuring-notifications).
+
+No extension backend, email credentials, API token, or extra Chrome permission
+is needed: GitHub stores submissions. Reports are public, and the forms include
+only the extension version automatically; code and testcase inputs are not
+attached. A private or account-free feedback flow would require changing the
+destination to a hosted form or a feedback backend.
+
 ## How to read a trace
 
-A **line** snapshot shows values **before that line executes**. Call and return steps show entry and exit from a function. Amber local values changed within that function invocation; a node-reference label shows where a variable points in a diagram. At the last step, **Solution output** is the return value for the example that was run, not a LeetCode submission verdict.
+A **line** snapshot shows values **before that line executes**. Call and return steps show entry and exit from a function. Amber local values changed within that function invocation; a node-reference label shows where a variable points in a diagram. At the last step, **Solution output** is the return value for the selected testcase, not a LeetCode submission verdict.
 
 Click **View … diagram** beside a structure value to find its visualization. Expand a structure's header to reopen a collapsed card. A heap preserves its array positions rather than sorting values for display. Trees initially show six levels; deeper captured nodes can be expanded.
 
@@ -73,9 +104,9 @@ Live Chrome checks are still required on LeetCode: trace one example per structu
 
 ## Limits and remaining work
 
-- Python/Python3 and the first public `Solution` method are the supported entry point. Scraped examples and annotation-based input builders do not cover every custom problem interface.
+- Python/Python3 and the first public `Solution` method are the supported entry point. Annotation-based input builders do not cover every custom problem interface.
 - Execution has time/event/snapshot budgets. Trees retain up to 11 serialized levels; expanding the diagram shows captured data only.
-- Monaco access and example extraction depend on LeetCode's page structure. The line-number rail is preferred for annotations, with absolute line-position math as a fallback.
+- Monaco access and selected-testcase extraction depend on LeetCode's page structure. The line-number rail is preferred for annotations, with absolute line-position math as a fallback.
 - Pattern detection can miss unfamiliar implementations or classify mixed algorithms imperfectly.
 - Graph visualization remains an optional stretch feature; adjacency maps still have the hash-map view.
 - Custom input editing, other languages, persistent traces, and contest pages remain outside v1 scope.
