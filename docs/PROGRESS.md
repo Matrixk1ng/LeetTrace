@@ -11,30 +11,29 @@
 - [x] **M2 — Serialization + routing** (B4 dict/list families + deque/set/heap tags, B13, schema v2 fields, B8 per-frame changed)
 - [x] **M3 — Pointer correctness** (B3 AST index mapping, stable colors, matrix + node pointers)
 - [x] **M4 — Visualizers wave 1** (MatrixViz, StackViz, QueueViz, SetViz, string-as-array, B17)
-- [ ] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
+- [x] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
 - [ ] **M6 — Patterns v2** (AST-based detector)
 - [ ] **M7 — Editor mirroring** (B5, B6, B16)
 - [ ] **M8 — Polish** (scrubber, B14, collapsible cards, windowing, notices, HeapViz, B18 README; GraphViz stretch)
 
 ## 2. Current state
 
-- **Next task:** Start M5 — visualizers wave 2. `LinkedListViz` (node chain,
-  `nodePointers` as labelled cursors, cycle indicator — the payload already
-  carries `nodeIds`, `has_cycle` and `cycleIndex`), `TreeViz` (SVG top-down
-  layout, `nodePointers` index into **pre-order** node order, traversal trail)
-  and `CallStackViz` (snapshots carry `frameId`/`frameName`/`callDepth`;
-  DESIGN.md §8 wants the card pinned when `callDepth > 1`). Fixtures already
-  exist: `mockLinkedList` and `mockTree` in
-  `src/panel/components/visualizers/mockData.ts`. Build against them, check the
-  result with `npm run gallery`, then route both in `VizRouter.tsx` — they are
-  the last two kinds still falling through to the JSON dump.
-- **Active branch:** `feature/m4-visualizers`, off `main`.
+- **Next task:** Start M6 — patterns v2. Replace the regex `detectPattern` in
+  `src/offscreen/pattern-detect.ts` (which still carries every B11 misfire)
+  with the AST scorer in DESIGN.md §7, written in `src/offscreen/tracer.py`
+  where `ast` is already imported and `_analyze_usage` / `_analyze_indexing`
+  give a template to follow. Score every pattern in §3's list rather than
+  first-match, return the best with a confidence, and surface it on the result
+  envelope next to `indexing` so the worker stops calling `detectPattern(code)`
+  in TypeScript. Pin the signals with a pytest file per pattern.
+- **Active branch:** `feature/m5-visualizers`, stacked on `feature/m4-visualizers`
+  (M4 is [#18](https://github.com/Matrixk1ng/LeetTrace/pull/18), still open).
 - **Merged:** [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15),
   [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16),
-  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) are all on `main`
-  as of 2026-09-05. Milestone branches are no longer stacked — branch M5 off
-  `main`.
-- **Open PRs:** M4 opens next, base `main`. **Ask before merging to `main`.**
+  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) landed on `main`
+  on 2026-09-05.
+- **Open PRs:** [#18 — M4](https://github.com/Matrixk1ng/LeetTrace/pull/18) → base `main`;
+  M5 opens next → base `feature/m4-visualizers`. **Ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
@@ -43,12 +42,51 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 76 passed |
+| `npm test` (vitest) | 97 passed |
 | `npm run test:tracer` (pytest) | 83 passed |
 | `npm run smoke:pyodide` | all pass |
 | `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### 2026-09-07 — M5 complete (visualizers wave 2)
+
+Every structure kind in DESIGN.md §3 now has a real visualizer. Only `graph`
+(the M8 stretch goal) still reaches the JSON fallback.
+
+- **LinkedListViz** — the chain with the cursors sitting *on* it. This is the
+  payoff for M3's `collapseNodeAliases`: `slow`, `fast` and `curr` each
+  serialize as a whole list of their own, and folding them into `nodePointers`
+  is what turns three overlapping copies of the same nodes into one chain with
+  three labelled positions. A cycle shows an `↩` tail and names the index it
+  links back to; an acyclic list ends in `→ None`.
+- **TreeViz** — SVG, top-down. x from an in-order walk and y from depth, which
+  keeps subtrees from overlapping without a full tree-layout algorithm. The
+  **pre-order** counter is tracked separately, because that is the order node
+  ids are serialized in and therefore what `nodePointers` index into — mixing
+  the two would put every cursor on the wrong node.
+- **CallStackViz** — innermost frame on top, indented, pinned above the
+  structure cards in `App.tsx` when depth > 1 (DESIGN.md §8). This is what
+  makes a recursive trace readable at all; without it a DFS looks like the same
+  few lines firing forever with no sense of depth.
+
+**One thing needed building first.** A snapshot carries only its *own* frame,
+so the enclosing frames can't be read off it. `processSnapshots` (new, wraps
+the existing per-snapshot mapping) replays the call/return event stream in
+order to reconstruct the stack, and attaches a copy to each snapshot as
+`Snapshot.callStack`. It resyncs rather than assuming — a budget can cut a
+trace mid-unwind, so the frame a step belongs to may sit below the recorded
+top. Module and class-body frames are excluded; they aren't calls the user
+made.
+
+**Checked with `npm run gallery`** — the linked-list cycle indicator, the tree
+layout (no overlapping subtrees, cursor on the right node) and the call-stack
+ordering were all verified visually there before committing.
+
+**Not verified — needs a human at `chrome://extensions`** (on top of the
+M1–M4 lists): trace *Linked List Cycle* and watch `slow`/`fast` converge on one
+chain; trace *Invert Binary Tree* or a level-order traversal and watch the tree
+redraw per step; trace *Subsets* and watch the call stack grow and shrink.
 
 ### 2026-09-07 — M4 complete (visualizers wave 1)
 
@@ -268,6 +306,12 @@ every step of a `Solution` method (pre-existing; it eats a gutter badge slot).
 Fix belongs with the variable-display work in M4/M8.
 
 ## 4. Deviations from the design doc
+
+- **M5: `Snapshot.callStack` added to schema v2.** DESIGN.md §4's Snapshot
+  carries `frameId`/`frameName`/`callDepth` for the *current* frame only, which
+  is not enough to draw a call stack — the ancestors exist only in the
+  call/return event stream. `processSnapshots` reconstructs them once per trace
+  and attaches the list. DESIGN.md §4 updated.
 
 - **M4: `heap` still renders through ArrayViz.** HeapViz is M8; a heap is a
   list and reads fine as one meanwhile. The M2 interim fallback is otherwise

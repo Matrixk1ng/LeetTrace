@@ -9,7 +9,7 @@
  * as a failure rather than as a visualizer that only works in a mock.
  */
 
-import type { DataStructureState, Highlight } from '../../../shared/types';
+import type { DataStructureState, Highlight, StackFrame } from '../../../shared/types';
 import { POINTER_COLORS } from '../../../shared/constants';
 
 const [BLUE, RED, GREEN, AMBER] = POINTER_COLORS;
@@ -163,3 +163,47 @@ export const mockLongArray: DataStructureState = {
   data: Array.from({ length: 60 }, (_, i) => i * 3),
   pointers: [{ name: 'i', index: 42, color: BLUE }],
 };
+
+/** An acyclic list, so the tail renders as `→ None`. */
+export const mockPlainLinkedList: DataStructureState = {
+  id: 'head',
+  type: 'linked_list',
+  data: {
+    __type: 'linked_list',
+    nodes: [1, 2, 3, 4, 5],
+    nodeIds: ['a', 'b', 'c', 'd', 'e'],
+    has_cycle: false,
+    cycleIndex: -1,
+  },
+  pointers: [],
+  nodePointers: [{ name: 'curr', nodeIndex: 2, color: BLUE }],
+};
+
+/** A tree with no cursor on it. */
+export const mockPlainTree: DataStructureState = {
+  id: 'root',
+  type: 'tree',
+  data: {
+    __type: 'tree',
+    root: {
+      id: 'p1',
+      val: 4,
+      left: {
+        id: 'p2',
+        val: 2,
+        left: { id: 'p4', val: 1, left: null, right: null },
+        right: { id: 'p5', val: 3, left: null, right: null },
+      },
+      right: { id: 'p3', val: 7, left: null, right: null },
+    },
+  },
+  pointers: [],
+};
+
+/** Mid-recursion in a backtracking solve. */
+export const mockCallStack: StackFrame[] = [
+  { frameId: 'subsets#1', frameName: 'subsets', line: 2 },
+  { frameId: 'backtrack#2', frameName: 'backtrack', line: 6 },
+  { frameId: 'backtrack#5', frameName: 'backtrack', line: 7 },
+  { frameId: 'backtrack#9', frameName: 'backtrack', line: 5 },
+];

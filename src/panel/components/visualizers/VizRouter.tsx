@@ -2,10 +2,12 @@ import type { DataStructureState, Highlight } from '../../../shared/types';
 import { useTrace } from '../../store/useTrace';
 import ArrayViz from './ArrayViz';
 import HashMapViz from './HashMapViz';
+import LinkedListViz from './LinkedListViz';
 import MatrixViz from './MatrixViz';
 import QueueViz from './QueueViz';
 import SetViz from './SetViz';
 import StackViz from './StackViz';
+import TreeViz from './TreeViz';
 
 /**
  * Human labels for the card headers — `linked_list` shouldn't be what the user
@@ -93,8 +95,14 @@ function Viz({
     case 'set':
       return <SetViz dataStructure={dataStructure} previousDataStructure={previous} />;
 
+    case 'linked_list':
+      return <LinkedListViz dataStructure={dataStructure} />;
+
+    case 'tree':
+      return <TreeViz dataStructure={dataStructure} />;
+
     default:
-      // linked_list and tree land here until M5; graph is the M8 stretch goal.
+      // Only `graph` reaches here now — the M8 stretch goal.
       return (
         <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-trace-text-secondary">
           {JSON.stringify(dataStructure.data, null, 2)}

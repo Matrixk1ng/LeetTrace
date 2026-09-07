@@ -17,11 +17,14 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 
 import ArrayViz from '../../src/panel/components/visualizers/ArrayViz';
+import CallStackViz from '../../src/panel/components/visualizers/CallStackViz';
 import HashMapViz from '../../src/panel/components/visualizers/HashMapViz';
+import LinkedListViz from '../../src/panel/components/visualizers/LinkedListViz';
 import MatrixViz from '../../src/panel/components/visualizers/MatrixViz';
 import QueueViz from '../../src/panel/components/visualizers/QueueViz';
 import SetViz from '../../src/panel/components/visualizers/SetViz';
 import StackViz from '../../src/panel/components/visualizers/StackViz';
+import TreeViz from '../../src/panel/components/visualizers/TreeViz';
 import * as mock from '../../src/panel/components/visualizers/mockData';
 import type { DataStructureState } from '../../src/shared/types';
 
@@ -124,9 +127,26 @@ function Gallery() {
         <ArrayViz dataStructure={mock.mockHeap} highlights={[]} />
       </Card>
 
+      <Card title="head — linked list" note="acyclic; curr sits on node 2">
+        <LinkedListViz dataStructure={mock.mockPlainLinkedList} />
+      </Card>
+
+      <Card title="head — linked list (cycle)" note="slow/fast folded on by M3; tail loops to index 1">
+        <LinkedListViz dataStructure={mock.mockLinkedList} />
+      </Card>
+
+      <Card title="root — tree" note="SVG top-down layout, in-order x placement">
+        <TreeViz dataStructure={mock.mockPlainTree} />
+      </Card>
+
+      <Card title="root — tree (cursor)" note="node cursor at pre-order index 2">
+        <TreeViz dataStructure={mock.mockTree} />
+      </Card>
+
       <Card title="out — array (empty)">
         <ArrayViz dataStructure={mock.mockEmptyArray} highlights={[]} />
       </Card>
+      <CallStackViz frames={mock.mockCallStack} />
     </div>
   );
 }
