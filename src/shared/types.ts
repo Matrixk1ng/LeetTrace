@@ -131,6 +131,7 @@ export interface TraceResult {
 
 export interface ExecutionError {
   error: string;
+  trace?: TraceResult;
   /** 1-indexed line in the user's code, when the failure has one. */
   line?: number;
 }
@@ -139,10 +140,16 @@ export interface ExecutionError {
 // Code extraction
 // ---------------------------------------------------------------------------
 
+export interface SelectedTestCase {
+  label: string;
+  input: string;
+}
+
 export interface ExtractedCode {
+  testCase?: SelectedTestCase;
   code: string;
   language: string;
-  /** Example input strings scraped from the problem description. */
+  /** Selected testcase as one named-argument input string. Legacy callers may provide examples. */
   examples: string[];
 }
 
@@ -178,7 +185,9 @@ export type Message =
   | { type: 'PYODIDE_LOADING'; payload: { progress: number } }
   /** Panel → content script, via chrome.tabs.sendMessage. */
   | { type: 'UPDATE_GUTTER'; payload: { line: number; annotations: GutterAnnotation[] } }
-  | { type: 'CLEAR_GUTTER' };
+  | { type: 'CLEAR_GUTTER' }
+  | { type: 'TRACE_STALE' }
+  | { type: 'TESTCASE_CHANGED' };
 
 /** Envelope for messages routed through the SW to the offscreen document. */
 export interface OffscreenMessage {

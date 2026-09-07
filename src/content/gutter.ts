@@ -37,15 +37,35 @@ function getOrCreateOverlayHost(targetLine: HTMLElement): HTMLElement | null {
   return overlay;
 }
 
-function findLineElement(line: number): HTMLElement | null {
-  // Monaco renders only visible .view-line nodes and they're not in source order
-  // in the DOM — they use absolute top positions. Sort by top so index === line.
-  const lineElements = (Array.from(document.querySelectorAll('.view-lines .view-line')) as HTMLElement[])
-    .map((el) => ({ el, top: parseFloat(el.style.top || '0') }))
-    .sort((a, b) => a.top - b.top);
-
-  return lineElements[line]?.el ?? null;
+export function findLineElement(line: number): HTMLElement | null {
+  const root = document.querySelector('.monaco-editor');
+  if (!root) return null;
+  const lines = Array.from(root.querySelectorAll<HTMLElement>('.view-lines .view-line'));
+  // The visible number rail also handles wrapped/folded lines when available.
+  const number = Array.from(root.querySelectorAll<HTMLElement>('.line-numbers'))
+    .find(el => el.textContent?.trim() === String(line + 1));
+  if (number) {
+    const top = number.getBoundingClientRect().top;
+    return lines.find(el => Math.abs(el.getBoundingClientRect().top - top) < 2) ?? null;
+  }
+  return lines.find(el => {
+    const height = parseFloat(el.style.height) || parseFloat(getComputedStyle(el).lineHeight);
+    return height > 0 && Math.abs(parseFloat(el.style.top) / height - line) < 0.01;
+  }) ?? null;
 }
+
+let active: { line: number; annotations: GutterAnnotation[] } | null = null;
+let scheduled = false;
+export function repositionGutterAnnotations(): void {
+  if (scheduled || !active) return;
+  scheduled = true;
+  requestAnimationFrame(() => {
+    scheduled = false;
+    if (active) updateGutterAnnotations(active.line, active.annotations);
+  });
+}
+window.addEventListener('scroll', repositionGutterAnnotations, true);
+window.addEventListener('resize', repositionGutterAnnotations);
 
 export function setCurrentLineHighlight(line: number): void {
   if (!Number.isInteger(line) || line < 0) {
@@ -84,6 +104,8 @@ export function clearCurrentLineHighlight(): void {
 }
 
 export function updateGutterAnnotations(line: number, annotations: GutterAnnotation[]): void {
+  clearGutterAnnotations();
+  active = { line, annotations };
   if (!Number.isInteger(line) || line < 0) {
     return;
   }
@@ -125,6 +147,7 @@ export function updateGutterAnnotations(line: number, annotations: GutterAnnotat
 }
 
 export function clearGutterAnnotations(): void {
+  active = null;
   clearCurrentLineHighlight();
 
   const existingBadges = document.querySelectorAll(`.${GUTTER_BADGE_CLASS}`);

@@ -6,6 +6,7 @@
  */
 
 import type {
+  DetectedPattern,
   DataStructureState,
   Highlight,
   NodePointer,
@@ -40,6 +41,7 @@ export interface RawTraceResult {
   error: { message: string; line: number } | null;
   returnValue: unknown;
   indexing: IndexingMap;
+  pattern?: DetectedPattern;
 }
 
 interface LinkedListData {
@@ -127,6 +129,7 @@ export function createColorAssigner(indexing: IndexingMap = {}): (name: string) 
 
 export interface TraceContext {
   indexing: IndexingMap;
+  pattern?: DetectedPattern;
   colorOf: (name: string) => string;
 }
 

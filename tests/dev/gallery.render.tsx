@@ -1,3 +1,8 @@
+import App from '../../src/panel/App';
+import { TraceContext } from '../../src/panel/store/useTrace';
+import { initialState } from '../../src/panel/store/traceReducer';
+import type { Snapshot } from '../../src/shared/types';
+import HeapViz from '../../src/panel/components/visualizers/HeapViz';
 /**
  * Renders every visualizer against the mockData fixtures and writes a single
  * static HTML page, so the cards can be *looked at* without loading the
@@ -51,9 +56,29 @@ function Card({ title, note, children }: { title: string; note?: string; childre
   );
 }
 
+const bstRoot = {__type: 'tree', root: {id: 'a', val: 2,
+  left: {id: 'b', val: 1, left: null, right: null},
+  right: {id: 'c', val: 3, left: null, right: null}}};
+const bst: Snapshot = {
+  step: 37, line: 17, event: 'return', frameId: 'f1', frameName: 'isValidBST', callDepth: 1,
+  callStack: [], highlights: [],
+  variables: {
+    self: {type: 'Solution', value: '<Solution object at 0xc27900>', changed: false},
+    dfs: {type: 'function', value: '<function Solution.isValidBST.dfs>', changed: false},
+    root: {type: 'TreeNode', value: bstRoot, changed: false},
+    return: {type: 'bool', value: true, changed: true},
+  },
+  dataStructures: [{id: 'root', type: 'tree', data: bstRoot, pointers: []}],
+};
 function Gallery() {
   return (
     <div style={{ width: 400 }}>
+      <TraceContext.Provider value={{state: {...initialState, status: 'paused',
+        snapshots: Array.from({length: 38}, () => bst), currentStep: 37, totalSteps: 38, returnValue: true,
+        detectedPattern: {type: 'dfs', confidence: .66, description: 'Explores subproblems through recursive calls.'}},
+        dispatch: () => {}}}>
+        <App />
+      </TraceContext.Provider>
       <Card title="nums — array" note="two cursors, stable colours">
         <ArrayViz dataStructure={mock.mockArray} highlights={[]} />
       </Card>
@@ -123,8 +148,8 @@ function Gallery() {
         />
       </Card>
 
-      <Card title="heap — heap" note="renders as a list until HeapViz lands in M8">
-        <ArrayViz dataStructure={mock.mockHeap} highlights={[]} />
+      <Card title="heap — heap" note="priority at root, expandable array storage">
+        <HeapViz dataStructure={mock.mockHeap} />
       </Card>
 
       <Card title="head — linked list" note="acyclic; curr sits on node 2">

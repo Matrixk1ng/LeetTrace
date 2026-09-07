@@ -1,19 +1,43 @@
+import { watchTestCases } from './testcase';
 import { extractCode, isDebugEnabled } from './editor-hook';
 import { injectFAB } from './fab';
-import { clearGutterAnnotations, updateGutterAnnotations } from './gutter';
+import { clearGutterAnnotations, updateGutterAnnotations, repositionGutterAnnotations } from './gutter';
 import type { ExtractCodeResponse, Message } from '../shared/types';
 
 const DEBUG_EVENT = 'LEETTRACE_DEBUG_EXTRACT';
 const DEBUG_GUTTER_UPDATE_EVENT = 'LEETTRACE_DEBUG_GUTTER_UPDATE';
 const DEBUG_GUTTER_CLEAR_EVENT = 'LEETTRACE_DEBUG_GUTTER_CLEAR';
 const EDITOR_POLL_INTERVAL_MS = 500;
-const GUTTER_CLEAR_DEBOUNCE_MS = 1000;
-
 let editorObserver: MutationObserver | null = null;
-let clearDebounceTimer: number | null = null;
+let observedRoot: Element | null = null;
+let stale = false;
+
+const testCaseWatcher = watchTestCases(() => {
+  clearGutterAnnotations();
+  stale = true;
+  void chrome.runtime.sendMessage({ type: 'TESTCASE_CHANGED' } satisfies Message).catch(() => {});
+});
+
+function markStale(): void {
+  clearGutterAnnotations();
+  if (stale) return;
+  stale = true;
+  void chrome.runtime.sendMessage({ type: 'TRACE_STALE' } satisfies Message).catch(() => {});
+}
+
+window.addEventListener('message', event => {
+  if (event.source === window && event.origin === window.location.origin &&
+      event.data?.type === 'LEETTRACE_MODEL_CHANGED') markStale();
+});
+window.addEventListener('popstate', markStale);
+document.addEventListener('input', event => {
+  if ((event.target as Element)?.closest('.monaco-editor')) markStale();
+});
 
 async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<ExtractCodeResponse['payload']> {
 	const payload = await extractCode();
+	stale = false;
+	testCaseWatcher.reset();
 
 	if (isDebugEnabled()) {
 		console.info('[LeetTrace][content] extraction result', {
@@ -27,45 +51,19 @@ async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise
 	return payload;
 }
 
-function scheduleGutterClear(): void {
-	if (clearDebounceTimer !== null) {
-		window.clearTimeout(clearDebounceTimer);
-	}
-
-	clearDebounceTimer = window.setTimeout(() => {
-		clearGutterAnnotations();
-		clearDebounceTimer = null;
-	}, GUTTER_CLEAR_DEBOUNCE_MS);
-}
-
-function attachEditorObserver(editorRoot: Element): void {
-	if (editorObserver) {
-		return;
-	}
-
-	const observeTarget = editorRoot.querySelector('.view-lines') ?? editorRoot;
-
-	editorObserver = new MutationObserver(() => {
-		scheduleGutterClear();
-	});
-
-	editorObserver.observe(observeTarget, {
-		childList: true,
-		subtree: true,
-		characterData: true,
-	});
-}
-
 function waitForMonacoEditorAndObserve(): void {
-	const pollId = window.setInterval(() => {
-		const editorRoot = document.querySelector('.monaco-editor');
-		if (!editorRoot) {
-			return;
-		}
-
-		window.clearInterval(pollId);
-		attachEditorObserver(editorRoot);
-	}, EDITOR_POLL_INTERVAL_MS);
+  window.setInterval(() => {
+    const root = document.querySelector('.monaco-editor');
+    if (root === observedRoot) return;
+    if (observedRoot) markStale();
+    editorObserver?.disconnect();
+    observedRoot = root;
+    if (!root) return;
+    editorObserver = new MutationObserver(repositionGutterAnnotations);
+    editorObserver.observe(root.querySelector('.view-lines') ?? root, {
+      childList: true, subtree: true, characterData: true, attributes: true,
+    });
+  }, EDITOR_POLL_INTERVAL_MS);
 }
 
 chrome.runtime.onMessage.addListener((
@@ -81,7 +79,7 @@ chrome.runtime.onMessage.addListener((
 			.catch((error: unknown) => {
 				const fallbackPayload = { code: '', language: 'unsupported', examples: [] };
 				console.warn('[LeetTrace][content] EXTRACT_CODE failed', error);
-				sendResponse({ ok: false, payload: fallbackPayload });
+				sendResponse({ ok: false, payload: fallbackPayload, error: error instanceof Error ? error.message : 'Could not read the selected testcase.' });
 			});
 
 		return true;
@@ -90,7 +88,7 @@ chrome.runtime.onMessage.addListener((
 	if (message?.type === 'UPDATE_GUTTER') {
 		const { line, annotations } = message.payload;
 
-		if (typeof line === 'number' && Array.isArray(annotations)) {
+		if (!stale && typeof line === 'number' && Array.isArray(annotations)) {
 			updateGutterAnnotations(line, annotations);
 		}
 

@@ -22,7 +22,6 @@ import {
   processSnapshots,
   type RawTraceResult,
 } from './snapshot-builder';
-import { detectPattern } from './pattern-detect';
 
 interface PyodideInstance {
   runPython: (code: string) => unknown;
@@ -102,7 +101,10 @@ function execute(code: string, examples: string[]): TraceResult | ExecutionError
   }
 
   if (raw.error) {
-    return { error: raw.error.message, line: raw.error.line };
+    return { error: raw.error.message, line: raw.error.line, trace: {
+      snapshots: processSnapshots(raw.snapshots, createTraceContext(raw.indexing)),
+      pattern: raw.pattern ?? undefined,
+    } };
   }
 
   // One context for the whole trace: pointer colours must stay fixed per name
@@ -111,7 +113,7 @@ function execute(code: string, examples: string[]): TraceResult | ExecutionError
 
   return {
     snapshots: processSnapshots(raw.snapshots, context),
-    pattern: detectPattern(code),
+    pattern: raw.pattern ?? undefined,
     truncated: raw.truncated,
     ...(raw.limit ? { limit: raw.limit } : {}),
     returnValue: raw.returnValue,

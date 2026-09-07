@@ -295,10 +295,23 @@ def _is_class_body(frame):
     return not (frame.f_code.co_flags & 0x1) and frame.f_code.co_name != '<module>'
 
 
+def _display_locals(frame):
+    items = list(frame.f_locals.items())
+    instance = frame.f_locals.get('self')
+    # Preserve meaningful state such as self.count, while hiding the wrapper in UI.
+    if instance is not None:
+        try:
+            fields = vars(instance)
+            items.extend(('self.' + k, v) for k, v in fields.items() if not k.startswith('_'))
+        except TypeError:
+            pass
+    return items
+
+
 def _collect_locals(frame, frame_id):
     previous = _prev_locals.get(frame_id, {})
     current = {}
-    for k, v in frame.f_locals.items():
+    for k, v in _display_locals(frame):
         if k.startswith('_') or k in _BASELINE_NAMES:
             continue
         try:
@@ -322,7 +335,7 @@ def _collect_locals(frame, frame_id):
 
 def _remember_locals(frame, frame_id):
     _prev_locals[frame_id] = {
-        k: repr(v) for k, v in frame.f_locals.items()
+        k: repr(v) for k, v in _display_locals(frame)
         if not k.startswith('_') and k not in _BASELINE_NAMES
     }
 
@@ -1095,6 +1108,170 @@ def _run_once(compiled, namespace, call):
     return error, returned
 
 
+
+def _detect_pattern(tree):
+    """Conservative structural signals, scored together. Scores are heuristic,
+    not calibrated probabilities; absence of evidence produces no badge."""
+    scores = {}
+    descriptions = {
+        'binary_search': 'Halves a search interval using a midpoint and boundary updates.',
+        'sliding_window': 'Expands a window, then advances its start while shrinking its contents.',
+        'two_pointer': 'Moves two indices toward one another through a sequence.',
+        'fast_slow_pointers': 'Advances node pointers by one and two links.',
+        'bfs': 'Consumes a queue from the front to explore in breadth-first order.',
+        'dfs': 'Explores subproblems through recursive calls.',
+        'backtracking': 'Adds a choice, explores recursively, then removes that choice.',
+        'dynamic_programming': 'Reuses cached subproblems or earlier table entries.',
+        'heap_top_k': 'Maintains a priority queue with heap operations.',
+        'monotonic_stack': 'Pops from a stack while its top violates an ordering condition.',
+        'prefix_sum': 'Builds cumulative totals and subtracts them to answer range queries.',
+        'union_find': 'Follows and updates parent links to maintain disjoint sets.',
+        'greedy': 'Processes sorted candidates and conditionally accepts a local choice.',
+    }
+    def award(kind, score):
+        scores[kind] = max(scores.get(kind, 0), score)
+    def name(node):
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return name(node.value) + '.' + node.attr
+        return ''
+    def calls(nodes):
+        return [n for n in nodes if isinstance(n, ast.Call)]
+    def method(n, attr):
+        return isinstance(n.func, ast.Attribute) and n.func.attr == attr
+    def base(n):
+        while isinstance(n, ast.Subscript):
+            n = n.value
+        return name(n)
+    aliases = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                aliases[a.asname or a.name] = a.name
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                aliases[a.asname or a.name] = (n.module or '') + '.' + a.name
+    def canonical(n):
+        parts = name(n).split('.')
+        return '.'.join([aliases.get(parts[0], parts[0]), *parts[1:]])
+    # Scope each analysis to one function, excluding nested helpers.
+    def local_walk(node):
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                yield from local_walk(child)
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for fn in functions:
+        nodes = list(local_walk(fn))
+        cs = calls(nodes)
+        recursive = [c for c in cs if name(c.func) in (fn.name, 'self.' + fn.name)]
+        if recursive:
+            award('dfs', .66)
+        for dec in fn.decorator_list:
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if canonical(target) in ('cache', 'lru_cache', 'functools.cache', 'functools.lru_cache') and recursive:
+                award('dynamic_programming', .96)
+        for c in cs:
+            if canonical(c.func) in ('heapq.heappush', 'heapq.heappop', 'heapq.heapify',
+                                     'heapq.heappushpop', 'heapq.heapreplace', 'heapq.nlargest', 'heapq.nsmallest'):
+                award('heap_top_k', .9)
+        if recursive:
+            for push in cs:
+                if method(push, 'append'):
+                    if any(method(pop, 'pop') and not pop.args and
+                           name(pop.func.value) == name(push.func.value) and
+                           push.lineno < rec.lineno < pop.lineno
+                           for pop in cs for rec in recursive):
+                        award('backtracking', .95)
+            parents = [n for n in nodes if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)]
+            if fn.name == 'find' and any(
+                base(p) in {'parent', 'parents', 'self.parent', 'self.parents'} for p in parents
+            ):
+                award('union_find', .98)
+        next_steps = {}
+        for n in nodes:
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Attribute):
+                for t in n.targets:
+                    dest = name(t)
+                    path = name(n.value)
+                    if dest and path.startswith(dest + '.'):
+                        next_steps[dest] = path[len(dest):]
+        if '.next' in next_steps.values() and '.next.next' in next_steps.values():
+            award('fast_slow_pointers', .98)
+        for loop in [n for n in nodes if isinstance(n, (ast.While, ast.For))]:
+            ln = list(local_walk(loop))
+            lc = calls(ln)
+            if any(method(c, 'popleft') for c in lc):
+                queues = {name(c.func.value) for c in lc if method(c, 'popleft')}
+                if any(isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                       and canonical(n.value.func) in ('deque', 'collections.deque')
+                       and any(name(t) in queues for t in n.targets) for n in nodes):
+                    award('bfs', .9)
+            if isinstance(loop, ast.While):
+                test = list(ast.walk(loop.test))
+                top_arrays = {base(n) for n in test if isinstance(n, ast.Subscript)
+                              and isinstance(n.slice, ast.UnaryOp) and isinstance(n.slice.op, ast.USub)
+                              and isinstance(n.slice.operand, ast.Constant) and n.slice.operand.value == 1}
+                if any(isinstance(n, ast.Compare) for n in test) and any(
+                    method(c, 'pop') and not c.args and name(c.func.value) in top_arrays for c in lc
+                ):
+                    award('monotonic_stack', .97)
+                moves = [n for n in ln if isinstance(n, ast.AugAssign)]
+                plus = {name(n.target) for n in moves if isinstance(n.op, ast.Add)}
+                minus = {name(n.target) for n in moves if isinstance(n.op, ast.Sub)}
+                test_names = {n.id for n in test if isinstance(n, ast.Name)}
+                if plus & test_names and minus & test_names:
+                    award('two_pointer', .84)
+                mids = [n for n in ln if isinstance(n, ast.Assign) and isinstance(n.value, ast.BinOp)
+                        and isinstance(n.value.op, ast.FloorDiv)
+                        and isinstance(n.value.right, ast.Constant) and n.value.right.value == 2
+                        and isinstance(n.value.left, ast.BinOp) and isinstance(n.value.left.op, ast.Add)]
+                for mid in mids:
+                    mid_names = {name(t) for t in mid.targets}
+                    if any(isinstance(n, ast.Assign) and isinstance(n.value, ast.BinOp)
+                           and isinstance(n.value.op, (ast.Add, ast.Sub))
+                           and name(n.value.left) in mid_names
+                           and any(name(t) in test_names for t in n.targets) for n in ln):
+                        award('binary_search', .96)
+            if isinstance(loop, ast.For):
+                for inner in [n for n in ln if isinstance(n, ast.While)]:
+                    ins = list(local_walk(inner))
+                    if any(isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Add)
+                           and isinstance(n.value, ast.Constant) and n.value.value == 1 for n in ins) and any(
+                        isinstance(n, ast.Delete) or isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Sub)
+                        for n in ins
+                    ):
+                        award('sliding_window', .94)
+            for a in [n for n in ln if isinstance(n, ast.Assign)]:
+                for target in a.targets:
+                    if not isinstance(target, ast.Subscript):
+                        continue
+                    reads = [n for n in ast.walk(a.value) if isinstance(n, ast.Subscript) and base(n) == base(target)]
+                    offset_reads = [r for r in reads if any(isinstance(n, ast.BinOp) and
+                                    isinstance(n.op, (ast.Add, ast.Sub)) for n in ast.walk(r.slice))]
+                    target_offset = any(isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Add, ast.Sub)) for n in ast.walk(target.slice))
+                    if offset_reads or reads and target_offset:
+                        award('dynamic_programming', .84)
+                        # A cumulative recurrence plus a later difference of the same table.
+                        if isinstance(a.value, ast.BinOp) and isinstance(a.value.op, ast.Add) and any(
+                            isinstance(n, ast.BinOp) and isinstance(n.op, ast.Sub)
+                            and isinstance(n.left, ast.Subscript) and isinstance(n.right, ast.Subscript)
+                            and base(n.left) == base(target) == base(n.right) for n in nodes
+                        ):
+                            award('prefix_sum', .97)
+        # Deliberately low confidence: sorting alone is never a greedy signal.
+        if any(canonical(c.func) == 'sorted' or method(c, 'sort') for c in cs):
+            if any(isinstance(n, ast.For) and any(isinstance(i, ast.If) and any(
+                isinstance(x, ast.AugAssign) or isinstance(x, ast.Call) and method(x, 'append')
+                for x in ast.walk(i)) for i in local_walk(n)) for n in nodes):
+                award('greedy', .61)
+    if not scores:
+        return None
+    best = max(scores, key=scores.get)
+    return {'type': best, 'confidence': scores[best], 'description': descriptions[best]}
+
+
 def run_traced(code_string, examples=None):
     global _user_max_line, _usage
 
@@ -1127,6 +1304,12 @@ def run_traced(code_string, examples=None):
 
     namespace = _build_namespace()
     candidates = _build_arg_candidates(tree, examples, namespace)
+    if examples and not candidates and _find_solution_method(tree) is not None:
+        return _dump({
+            'snapshots': [], 'truncated': False, 'limit': None,
+            'indexing': indexing, 'returnValue': None,
+            'error': {'message': 'Could not parse the testcase inputs. Check that each value is a valid Python or JSON literal.', 'line': 1},
+        })
 
     # Try each parseable example in turn: an argument-name mismatch TypeErrors
     # before reaching the user's body, and the next example often binds cleanly.
@@ -1161,6 +1344,7 @@ def run_traced(code_string, examples=None):
         # index which arrays. The TS side builds pointers from this instead of
         # treating every in-range int as an index (bug B3).
         'indexing': indexing,
+        'pattern': _detect_pattern(tree) if tree is not None else None,
     }
 
     if isinstance(error, KeyboardInterrupt):

@@ -1,6 +1,9 @@
 import { useTrace } from '../store/useTrace';
 
 function prettifyPatternName(name: string): string {
+  const labels: Record<string, string> = {bfs: 'BFS', dfs: 'DFS', heap_top_k: 'Heap / Top-K',
+    dynamic_programming: 'Dynamic programming', fast_slow_pointers: 'Fast & slow pointers'};
+  if (labels[name]) return labels[name];
   return name
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -25,7 +28,7 @@ export default function PatternBadge() {
   }
 
   return (
-    <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-violet-400/35 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-200">
+    <div tabIndex={0} title={pattern.description + " (Heuristic match: " + Math.round(pattern.confidence * 100) + "%)"} aria-label={pattern.description} className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-violet-400/35 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-200">
       <MagnifierIcon />
       <span>{prettifyPatternName(pattern.type)}</span>
     </div>

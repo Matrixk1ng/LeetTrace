@@ -1,3 +1,4 @@
+import type { Message } from '../shared/types';
 const FAB_ID = 'leettrace-floating-action-button';
 const FAB_CLASS = 'leettrace-fab';
 const FAB_ICON_CLASS = 'leettrace-fab-icon';
@@ -32,10 +33,25 @@ export function injectFAB(): void {
   icon.appendChild(path);
   fab.appendChild(icon);
 
+  const showFallback = () => {
+    fab.title = 'Click the LeetTrace extension icon in the Chrome toolbar to open the panel.';
+    fab.setAttribute('aria-label', fab.title);
+    let note = document.getElementById('leettrace-panel-help');
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'leettrace-panel-help';
+      note.setAttribute('role', 'status');
+      note.style.cssText = 'position:fixed;bottom:80px;right:20px;max-width:240px;padding:12px;background:#16213e;color:white;border:1px solid #38bdf8;border-radius:8px;z-index:2147483647;font:13px system-ui';
+      document.body.appendChild(note);
+    }
+    note.textContent = fab.title;
+  };
   fab.addEventListener('click', () => {
-    void chrome.runtime.sendMessage({ type: 'OPEN_PANEL' }).catch((error) => {
-      console.warn('[LeetTrace][content] Failed to send OPEN_PANEL message', error);
-    });
+    void chrome.runtime.sendMessage({ type: 'OPEN_PANEL' } satisfies Message)
+      .then(response => {
+        if (!response?.ok) showFallback();
+        else document.getElementById('leettrace-panel-help')?.remove();
+      }).catch(showFallback);
   });
 
   document.body.appendChild(fab);

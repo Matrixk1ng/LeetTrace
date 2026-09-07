@@ -1,3 +1,4 @@
+import HeapViz from './HeapViz';
 import type { DataStructureState, Highlight } from '../../../shared/types';
 import { useTrace } from '../../store/useTrace';
 import ArrayViz from './ArrayViz';
@@ -43,19 +44,21 @@ export default function VizRouter() {
   return (
     <div className="flex flex-col gap-3">
       {dataStructures.map((ds) => {
-        const previous = previousById.get(ds.id) ?? null;
+        const candidate = previousById.get(ds.id);
+        const previous = candidate?.type === ds.type ? candidate : null;
 
         return (
-          <section
-            key={ds.id}
+          <details open
+            id={"structure-" + encodeURIComponent(ds.id)}
+            key={ds.id + ":" + ds.type}
             className="rounded-[10px] border border-trace-border bg-trace-bg-card"
             style={{ padding: 14 }}
           >
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-trace-text-muted">
+            <summary className="mb-2 cursor-pointer text-sm font-semibold text-trace-text-secondary">
               {ds.id} — {KIND_LABELS[ds.type] ?? ds.type}
-            </div>
+            </summary>
             <Viz dataStructure={ds} previous={previous} highlights={highlights} />
-          </section>
+          </details>
         );
       })}
     </div>
@@ -74,11 +77,12 @@ function Viz({
   switch (dataStructure.type) {
     // `string` renders as its characters — the builder only routes one here
     // when the code actually indexes it, so a bare `word` stays a variable.
-    // `heap` is a list and reads fine as one until HeapViz lands in M8.
     case 'array':
     case 'string':
-    case 'heap':
       return <ArrayViz dataStructure={dataStructure} highlights={highlights} />;
+
+    case 'heap':
+      return <HeapViz dataStructure={dataStructure} />;
 
     case 'matrix':
       return <MatrixViz dataStructure={dataStructure} highlights={highlights} />;
@@ -99,14 +103,14 @@ function Viz({
       return <LinkedListViz dataStructure={dataStructure} />;
 
     case 'tree':
-      return <TreeViz dataStructure={dataStructure} />;
+      return <TreeViz dataStructure={dataStructure} previousDataStructure={previous} />;
 
     default:
       // Only `graph` reaches here now — the M8 stretch goal.
       return (
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-trace-text-secondary">
+        <details><summary>Raw data</summary><pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-trace-text-secondary">
           {JSON.stringify(dataStructure.data, null, 2)}
-        </pre>
+        </pre></details>
       );
   }
 }

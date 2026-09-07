@@ -36,6 +36,7 @@
 }
 
 .leettrace-gutter-overlay {
+  overflow: hidden;
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -77,6 +78,9 @@
 }
 
 .leettrace-gutter-item {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   display: inline-flex;
   align-items: center;
   padding: 1px 5px;

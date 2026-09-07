@@ -131,14 +131,14 @@ chrome.runtime.onMessage.addListener((
 
   if (message?.type === 'OPEN_PANEL') {
     const tabId = sender.tab?.id;
-    if (typeof tabId === 'number') {
-      void chrome.sidePanel.open({ tabId }).catch((error: unknown) => {
-        console.error('[LeetTrace] Failed to open side panel', error);
-      });
-    } else {
-      console.warn('[LeetTrace] OPEN_PANEL received without sender tab id');
+    if (typeof tabId !== 'number') {
+      sendResponse({ ok: false });
+      return false;
     }
-    return false;
+    void chrome.sidePanel.open({ tabId })
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
   }
 
   if (message?.type === 'EXTRACT_CODE') {

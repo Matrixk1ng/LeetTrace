@@ -1,5 +1,6 @@
 import { DEFAULT_SPEED } from '../../shared/constants';
 import type {
+  SelectedTestCase,
   Snapshot,
   ExecutionStatus,
   DetectedPattern,
@@ -12,6 +13,9 @@ import type {
  */
 export interface TraceState {
   status: ExecutionStatus;
+  stale: boolean;
+  inputChanged: boolean;
+  testCase: SelectedTestCase | null;
   snapshots: Snapshot[];
   currentStep: number;
   /**
@@ -80,6 +84,9 @@ export type TraceAction =
       type: 'SET_PATTERN';
       payload: DetectedPattern | null;
     }
+  | { type: 'MARK_STALE' }
+  | { type: 'INPUT_CHANGED' }
+  | { type: 'SET_TESTCASE'; payload: SelectedTestCase | null }
   | {
       type: 'CLEAR';
     };
@@ -89,6 +96,9 @@ export type TraceAction =
  */
 export const initialState: TraceState = {
   status: 'idle',
+  stale: false,
+  inputChanged: false,
+  testCase: null,
   snapshots: [],
   currentStep: 0,
   previousStep: null,
@@ -113,6 +123,8 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         snapshots,
+        stale: false,
+        inputChanged: false,
         totalSteps: snapshots.length,
         currentStep: 0,
         previousStep: null,
@@ -171,8 +183,8 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         status: 'running',
-        error: null,
-        errorLine: null,
+        currentStep: state.currentStep >= state.totalSteps - 1 ? 0 : state.currentStep,
+        previousStep: state.currentStep >= state.totalSteps - 1 ? null : state.previousStep,
       };
     }
 
@@ -193,9 +205,11 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
     }
 
     case 'SET_ERROR': {
+      const errorStep = state.snapshots.findLastIndex(s => s.line === action.payload.line);
       return {
         ...state,
         status: 'error',
+        currentStep: errorStep >= 0 ? errorStep : Math.max(0, state.totalSteps - 1),
         error: action.payload.message,
         errorLine: action.payload.line ?? null,
         loadingMessage: null,
@@ -219,6 +233,12 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       };
     }
 
+    case 'SET_TESTCASE':
+      return { ...state, testCase: action.payload };
+    case 'INPUT_CHANGED':
+      return { ...state, stale: true, inputChanged: true, status: state.status === 'running' ? 'paused' : state.status };
+    case 'MARK_STALE':
+      return { ...state, stale: true, status: state.status === 'running' ? 'paused' : state.status };
     case 'CLEAR': {
       return initialState;
     }

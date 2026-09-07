@@ -1,11 +1,19 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** v1.5 · 2026-09-07 (M1–M5 landed; §2–§6, §8 and §10 reflect what shipped)
+**Status:** v1.8 · 2026-09-07 (M1–M5 merged; M6–M8 implemented locally, live integration checks pending)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
 
-## 1. Where the project is today
+## 1. Current implementation
+
+M1–M8 are implemented; see PROGRESS.md for exact verification. The panel has
+dedicated visualizers for every supported structure except the optional graph
+stretch, AST pattern hints, scroll-aware editor mirroring, readable value
+summaries, error-state inspection, and playback/windowing controls. The following
+baseline and §2 bug audit are historical context, not a list of current defects.
+
+### Original baseline
 
 ### Working end-to-end
 - Extension scaffolding: MV3 manifest, CRXJS build, side panel, content script on `leetcode.com/problems/*`.
@@ -96,7 +104,7 @@ LeetTrace v1.0 is done when, for any LeetCode problem solvable with a Python `So
 | Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped, per-node `id`) | ✅ TreeViz (SVG top-down, in-order x / depth y, node cursors) | **Done** (M5) |
 | Stack (list used LIFO) | ✅ (M2) AST usage: `append` + no-arg `pop()` | list + `kind: 'stack'` | ✅ StackViz (vertical, top first, push/pop callouts) | **Done** (M4) |
 | Queue / deque | ✅ (M2) | `{__type: 'deque', items}` | ✅ QueueViz (front/back labels, popleft/append callouts) | **Done** (M4) |
-| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); reads as a list until HeapViz in **M8** |
+| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | **Done (M8):** positional tree plus expandable array storage |
 | Graph (adjacency dict/list) | dict of lists w/ node-like keys, or `defaultdict(list)` | dict | GraphViz (force/ring layout, visited coloring) | **New — stretch, ship last** |
 | Recursion / call stack | `call`/`return` events | `Snapshot.callStack` (name, line, frameId) | ✅ CallStackViz (pinned when depth > 1) | **Done** (M5) |
 
@@ -194,6 +202,14 @@ In `_build_auto_runner`, after choosing `method_name`:
 
 ## 7. Pattern detection v2 (fixes B11)
 
+**Implemented:** `_detect_pattern` in tracer.py scores structural evidence within
+function scopes, including import aliases. The worker reads `pattern` from the
+raw result; the regex implementation is removed. All families below, fast/slow,
+and conservative greedy hints have regression fixtures. Scores are heuristic,
+not calibrated probabilities. Low evidence produces no badge. Greedy uses sorted
+iteration plus conditional selection and intentionally has lower confidence.
+
+
 Move detection into Python (we already have `ast`): analyze the parsed tree once per trace, return the best `DetectedPattern` (+ optionally top-3 with confidences).
 
 Signals (illustrative, each contributes weighted score):
@@ -214,7 +230,19 @@ AST analysis ignores comments/strings by construction, killing the current false
 
 ---
 
-## 8. UI/UX plan
+## 8. UI/UX implementation
+
+The following list is implemented. Runtime errors carry optional partial
+`ExecutionError.trace` results and remain visible while stepping. Local values
+use shared compact formatting, omit routine runtime objects, preserve useful
+`self.field` values, and link structure references to diagrams. A step card
+explains call/return/before-line context and shows output. Tree cursors highlight
+the previous navigated position; this does not claim all visited nodes.
+
+Editor staleness uses Monaco content/model/disposal events (plus input fallback)
+instead of version polling. Visible line numbers are preferred for folded/wrapped
+lines, with absolute top/line-height fallback. Live LeetCode checks are pending.
+
 
 - **VizRouter** routes all `StructureKind`s; unknown kinds keep the JSON fallback behind a "raw" disclosure.
 - **Layout:** collapsible per-structure cards (traces with 3+ structures get crowded in a 400px panel); call-stack card pinned when `callDepth > 1`.
@@ -222,7 +250,7 @@ AST analysis ignores comments/strings by construction, killing the current false
 - **Long data:** arrays > ~60 items render windowed around active pointers with "… N more" ends; trees depth-capped at 6 visible levels with expand.
 - **Errors:** show the error snapshot's variables (the trace up to the exception is still loaded) instead of a dead-end error card — "your code failed on line N, here's the state when it did" is the killer teaching moment.
 - **Truncation notice** when `MAX_SNAPSHOTS` hit.
-- **Trace staleness:** when the editor content changes (Monaco model version), badge the panel "code changed — retrace".
+- **Trace staleness:** when the editor content changes (Monaco content/model notifications), badge the panel "code changed — retrace".
 
 ---
 

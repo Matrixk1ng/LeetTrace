@@ -25,7 +25,7 @@ Then implement, milestone by milestone, until LeetTrace meets the "fully done" d
 
 ## Context
 
-LeetTrace is a Chrome MV3 extension (CRXJS + Vite + React 19 + Tailwind 4) that traces LeetCode Python solutions with Pyodide + `sys.settrace` in an offscreen document and visualizes data structures in the side panel. Arrays and hashmaps already work end-to-end — do not regress them. The Python tracer lives as a template string in `src/offscreen/pyodide-runner.ts`; the panel is in `src/panel/`; the content script in `src/content/`; shared contracts in `src/shared/types.ts`.
+LeetTrace is a Chrome MV3 extension (CRXJS + Vite + React 19 + Tailwind 4) that traces LeetCode Python solutions with Pyodide + `sys.settrace` in an offscreen document and visualizes data structures in the side panel. Arrays and hashmaps already work end-to-end — do not regress them. The Python tracer lives in `src/offscreen/tracer.py` and is bundled into `pyodide-worker.ts`; the panel is in `src/panel/`; the content script in `src/content/`; shared contracts in `src/shared/types.ts`.
 
 ## Ground rules
 

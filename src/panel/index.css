@@ -34,6 +34,7 @@
   }
 
   input[type='range'] {
+    --value: 0;
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
@@ -87,3 +88,6 @@ body {
 #root {
   min-height: 100vh;
 }
+
+:focus-visible { outline: 2px solid #38bdf8; outline-offset: 3px; }
+button:disabled { cursor: not-allowed; opacity: .45; }

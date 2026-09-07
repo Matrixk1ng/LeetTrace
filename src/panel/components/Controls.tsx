@@ -1,4 +1,4 @@
-import type { ChangeEvent } from 'react';
+import { useEffect, type ChangeEvent } from 'react';
 import { MAX_SPEED, MIN_SPEED } from '../../shared/constants';
 import { useTrace } from '../store/useTrace';
 
@@ -82,6 +82,23 @@ interface ControlsProps {
 export default function Controls({ requestTrace }: ControlsProps) {
   const { state, dispatch, isAtEnd, isAtStart } = useTrace();
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('input, textarea, select, button, summary, a, [contenteditable="true"]') ||
+          event.altKey || event.ctrlKey || event.metaKey || state.totalSteps === 0 || state.status === 'loading') return;
+      if (!['ArrowLeft', 'ArrowRight', ' '].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === ' ') dispatch({ type: state.status === 'running' ? 'PAUSE' : 'PLAY' });
+      else {
+        dispatch({ type: 'PAUSE' });
+        dispatch({ type: event.key === 'ArrowLeft' ? 'PREV_STEP' : 'NEXT_STEP' });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dispatch, state.status, state.totalSteps]);
+
   const isBusy = state.status === 'loading';
   const playbackDisabled = state.status === 'idle' || state.status === 'loading' || state.totalSteps === 0;
   const traceDisabled = state.status === 'loading' || state.status === 'running';
@@ -91,7 +108,7 @@ export default function Controls({ requestTrace }: ControlsProps) {
   };
 
   return (
-    <section className="border-b border-trace-border bg-trace-bg-card/90 px-4 py-3">
+    <section className="shrink-0 border-b border-trace-border bg-trace-bg-card/90 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <IconButton
@@ -137,6 +154,16 @@ export default function Controls({ requestTrace }: ControlsProps) {
         </button>
       </div>
 
+      {state.testCase ? <details className="mt-3 text-xs text-trace-text-secondary">
+        <summary className="cursor-pointer">Tracing {state.testCase.label}</summary>
+        <pre className="mt-2 whitespace-pre-wrap break-all max-h-24 overflow-auto">{state.testCase.input}</pre>
+      </details> : null}
+      <label className="mt-3 block text-xs text-trace-text-secondary" htmlFor="trace-step">Timeline</label>
+      <input id="trace-step" type="range" min={0} max={Math.max(0, state.totalSteps - 1)}
+        value={state.currentStep} disabled={playbackDisabled} className="w-full"
+        style={{ "--value": String(state.currentStep / Math.max(1, state.totalSteps - 1)) } as React.CSSProperties}
+        aria-valuetext={'Step ' + (state.currentStep + 1) + ' of ' + state.totalSteps}
+        onChange={event => { dispatch({ type: 'PAUSE' }); dispatch({ type: 'SET_STEP', payload: Number(event.target.value) }); }} />
       <div className="mt-3 flex items-end justify-between gap-3">
         <div className="text-sm text-trace-text-secondary">
           Step <span className="font-[JetBrains_Mono,ui-monospace,SFMono-Regular,Menlo,monospace] text-trace-text-primary">{state.totalSteps === 0 ? 0 : state.currentStep + 1}</span>
@@ -145,7 +172,7 @@ export default function Controls({ requestTrace }: ControlsProps) {
 
         <div className="min-w-0 flex-1 max-w-[190px]">
           <div className="mb-1 flex items-center justify-between text-xs text-trace-text-secondary">
-            <label htmlFor="trace-speed">Speed</label>
+            <label htmlFor="trace-speed">Step delay</label>
             <span className="font-[JetBrains_Mono,ui-monospace,SFMono-Regular,Menlo,monospace] text-trace-text-primary">{state.speed}ms</span>
           </div>
           <input

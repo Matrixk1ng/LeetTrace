@@ -1,3 +1,4 @@
+import { formatTraceValue, visibleVariables } from '../../shared/display';
 import { useEffect, useRef } from 'react';
 import type {
   ExecutionResponse,
@@ -16,44 +17,43 @@ const MAX_GUTTER_VARS = 4;
 
 function buildGutterAnnotations(snapshot: Snapshot | null): GutterAnnotation[] {
   if (!snapshot) return [];
-  const entries = Object.entries(snapshot.variables);
-  // Show changed variables first, then a few stable ones, capped so the badge fits.
-  entries.sort(([, a], [, b]) => Number(b.changed) - Number(a.changed));
-  return entries.slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
-    variable,
-    value: formatGutterValue(v.value),
-    changed: v.changed,
+  return visibleVariables(snapshot).slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
+    variable, value: formatTraceValue(v.value, v.type), changed: v.changed,
   }));
-}
-
-function formatGutterValue(value: unknown): string {
-  if (value === null) return 'None';
-  if (value === true) return 'True';
-  if (value === false) return 'False';
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    const text = JSON.stringify(value);
-    return text.length > 24 ? text.slice(0, 23) + '…' : text;
-  }
-  if (typeof value === 'object') {
-    const text = JSON.stringify(value);
-    return text.length > 24 ? text.slice(0, 23) + '…' : text;
-  }
-  return String(value);
 }
 
 export function useExecution() {
   const { state, dispatch, isAtEnd, currentSnapshot } = useTrace();
+  const staleRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const retracePendingRef = useRef(false);
+  const requestRef = useRef<(() => Promise<void>) | null>(null);
+  const retraceTimerRef = useRef<number | undefined>(undefined);
   const intervalRef = useRef<number | null>(null);
   const leetcodeTabIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const handleMessage = (message: unknown) => {
+    const handleMessage = (message: unknown, sender: chrome.runtime.MessageSender) => {
       if (!isRuntimeMessage(message)) {
         return;
       }
 
-      if (message.type === 'PYODIDE_LOADING') {
+      if (message.type === 'TESTCASE_CHANGED' && sender.tab?.id === leetcodeTabIdRef.current) {
+        staleRef.current = true;
+        retracePendingRef.current = true;
+        dispatch({ type: 'INPUT_CHANGED' });
+        window.clearTimeout(retraceTimerRef.current);
+        retraceTimerRef.current = window.setTimeout(() => {
+          if (!inFlightRef.current) void requestRef.current?.();
+        }, 400);
+      }
+
+      if (message.type === 'TRACE_STALE' && sender.tab?.id === leetcodeTabIdRef.current) {
+        staleRef.current = true;
+        dispatch({ type: 'MARK_STALE' });
+      }
+
+      if (message.type === 'PYODIDE_LOADING' && state.status === 'loading') {
         const progress = message.payload.progress;
         const suffix = typeof progress === 'number' ? ` (${progress}%)` : '';
         dispatch({ type: 'SET_LOADING', payload: `Loading Python runtime...${suffix}` });
@@ -77,7 +77,7 @@ export function useExecution() {
     const tabId = leetcodeTabIdRef.current;
     if (typeof tabId !== 'number') return;
 
-    if (state.status === 'idle' || state.status === 'error' || state.totalSteps === 0) {
+    if (state.status === 'idle' || state.stale || state.totalSteps === 0) {
       void chrome.tabs
         .sendMessage(tabId, { type: 'CLEAR_GUTTER' } satisfies Message)
         .catch(() => {});
@@ -95,7 +95,7 @@ export function useExecution() {
         payload: { line: editorLine, annotations },
       } satisfies Message)
       .catch(() => {});
-  }, [currentSnapshot, state.status, state.totalSteps]);
+  }, [currentSnapshot, state.status, state.totalSteps, state.stale]);
 
   useEffect(() => {
     if (state.status !== 'running') {
@@ -129,8 +129,13 @@ export function useExecution() {
   }, [dispatch, isAtEnd, state.speed, state.status]);
 
   const requestTrace = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    retracePendingRef.current = false;
     console.log('[LeetTrace] requestTrace called');
     dispatch({ type: 'CLEAR' });
+    staleRef.current = false;
+    dispatch({ type: 'SET_LOADING', payload: 'Reading selected testcase…' });
 
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -156,6 +161,11 @@ export function useExecution() {
       } catch (e) {
         console.warn('[LeetTrace] EXTRACT_CODE failed:', e);
       }
+      if (extracted && !extracted.ok) {
+        dispatch({ type: 'SET_ERROR', payload: { message: extracted.error ?? 'Could not read LeetCode’s selected testcase.' } });
+        return;
+      }
+      dispatch({ type: 'SET_TESTCASE', payload: extracted?.payload.testCase ?? null });
       const code = extracted?.payload?.code?.trim() ?? '';
       const language = extracted?.payload?.language?.toLowerCase() ?? '';
       const examples = extracted?.payload?.examples ?? [];
@@ -180,12 +190,16 @@ export function useExecution() {
       } satisfies Message) as ExecutionResponse | undefined;
       console.log('[LeetTrace] background response:', response);
 
+      if (retracePendingRef.current) return;
+
       if (!response) {
         dispatch({ type: 'SET_ERROR', payload: { message: 'No response from the background worker.' } });
         return;
       }
 
       if (response.type === 'EXECUTION_ERROR') {
+        if (response.payload.trace) dispatch({ type: 'LOAD_SNAPSHOTS', payload: response.payload.trace });
+        if (staleRef.current) dispatch({ type: 'MARK_STALE' });
         dispatch({
           type: 'SET_ERROR',
           payload: { message: response.payload.error, line: response.payload.line },
@@ -194,6 +208,7 @@ export function useExecution() {
       }
 
       dispatch({ type: 'LOAD_SNAPSHOTS', payload: response.payload });
+      if (staleRef.current) dispatch({ type: 'MARK_STALE' });
     } catch (error) {
       console.error('[LeetTrace] requestTrace error:', error);
       dispatch({
@@ -202,8 +217,22 @@ export function useExecution() {
           message: error instanceof Error ? error.message : 'Unable to start tracing.',
         },
       });
+    } finally {
+      inFlightRef.current = false;
+      if (retracePendingRef.current) {
+        window.clearTimeout(retraceTimerRef.current);
+        retraceTimerRef.current = window.setTimeout(() => { void requestRef.current?.(); }, 400);
+      }
     }
   };
+
+  useEffect(() => {
+    requestRef.current = requestTrace;
+  });
+  useEffect(() => () => {
+    window.clearTimeout(retraceTimerRef.current);
+    requestRef.current = null;
+  }, []);
 
   return {
     requestTrace,

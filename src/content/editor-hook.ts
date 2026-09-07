@@ -1,3 +1,5 @@
+import { readSelectedTestCase } from './testcase';
+import type { ExtractedCode } from '../shared/types';
 const MONACO_RESPONSE_TYPE = 'LEETTRACE_MONACO_EXTRACT_RESULT';
 const MONACO_READY_TYPE = 'LEETTRACE_MONACO_EXTRACT_READY';
 const MONACO_ERROR_TYPE = 'LEETTRACE_MONACO_EXTRACT_ERROR';
@@ -221,40 +223,7 @@ function extractFromDom(): string {
   return code;
 }
 
-function extractExampleInputs(): string[] {
-  const inputs: string[] = [];
-  const seen = new Set<string>();
-
-  // Match "Input: ..." up to the next Output:/Explanation:/Example label.
-  const inputRegex = /Input:\s*([\s\S]+?)(?=\s*(?:Output:|Explanation:|Example\s*\d|Constraints?:|$))/gi;
-
-  // Prefer <pre> blocks (classic LeetCode example layout); fall back to any element
-  // mentioning Input: in case the problem description uses paragraphs instead.
-  const candidates: Element[] = [
-    ...Array.from(document.querySelectorAll('pre')),
-    ...Array.from(document.querySelectorAll('div, p')).filter((el) => {
-      const text = el.textContent ?? '';
-      return text.includes('Input:') && text.length < 4000;
-    }),
-  ];
-
-  for (const el of candidates) {
-    const text = (el.textContent ?? '').replace(/\u00a0/g, ' ');
-    inputRegex.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = inputRegex.exec(text)) !== null) {
-      const cleaned = match[1].trim().replace(/\s+/g, ' ');
-      if (!cleaned || seen.has(cleaned)) continue;
-      seen.add(cleaned);
-      inputs.push(cleaned);
-    }
-    if (inputs.length > 0) break;
-  }
-
-  return inputs;
-}
-
-export async function extractCode(): Promise<{ code: string; language: string; examples: string[] }> {
+export async function extractCode(): Promise<ExtractedCode> {
   const language = detectLeetCodeLanguage();
 
   if (language === 'unsupported') {
@@ -269,7 +238,11 @@ export async function extractCode(): Promise<{ code: string; language: string; e
   const monacoCode = await extractFromMonacoApi();
   const useMonaco = typeof monacoCode === 'string' && monacoCode.length > 0;
   const code = useMonaco ? monacoCode : extractFromDom();
-  const examples = extractExampleInputs();
+  const selected = readSelectedTestCase();
+  if (selected.status === 'unreadable') throw new Error(selected.error);
+  if (selected.status === 'absent') throw new Error('Open LeetCode’s Testcase tab and select a case, then click Trace.');
+  const testCase = selected.testCase;
+  const examples = [testCase.input];
 
   debugLog(useMonaco ? 'Using Monaco API result' : 'Using DOM fallback result', {
     language,
@@ -281,5 +254,6 @@ export async function extractCode(): Promise<{ code: string; language: string; e
     code,
     language,
     examples,
+    testCase,
   };
 }

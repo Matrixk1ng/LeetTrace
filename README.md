@@ -1,283 +1,83 @@
-# 🔍 LeetTrace
+# LeetTrace
 
-A Chrome extension that overlays real-time data structure visualizations directly on LeetCode. Step through your code and watch arrays, trees, linked lists, and hashmaps come alive — right where you code.
+LeetTrace is a Chrome extension for stepping through LeetCode Python solutions beside the editor. It runs a scraped example locally in Pyodide and shows how variables, data structures, and function calls change.
 
-> **No context switching.** LeetTrace lives in Chrome's side panel, next to LeetCode's editor.
+## What is implemented
 
-![LeetTrace Demo](docs/demo.gif) <!-- TODO: Add demo GIF -->
+- Arrays and indexed strings with stable index pointers; large arrays show a browsable 60-item window.
+- Matrices, hash maps and counters, sets, stacks, queues, linked lists (including cycles), binary trees, and heaps.
+- Collapsible diagrams, node references, previous-cursor tree highlights, and recursive call stacks.
+- Readable local values and return values. Python function objects and the `self` wrapper are hidden; useful instance fields such as `self.count` remain visible.
+- Timeline scrubbing, play/pause, forward/back, replay from the end, and step delay. With the panel focused, use Left/Right or Space; form controls retain their native keys.
+- AST-based pattern hints for binary search, two pointers, sliding windows, BFS, DFS, backtracking, dynamic programming, heaps, prefix sums, monotonic stacks, fast/slow pointers, union-find, and greedy algorithms. These are conservative heuristics, not a correctness proof or calibrated probabilities. Hover or focus the badge for its description.
+- Editor highlights and compact badges that follow scrolling; code changes mark existing traces stale.
+- Partial state at runtime errors, printed output, and notices when tracing stops at a budget.
 
----
+## Run locally
 
-## Features
+Use a Node.js version supported by the installed Vite package (`node_modules/vite/package.json`), npm, Chrome, and Python with pytest for tracer tests.
 
-- **Array visualization** with index labels and pointer arrows (i, j, left, right)
-- **HashMap visualization** with key→value pairs and new-entry highlighting
-- **Linked list visualization** with node chains and slow/fast pointer tracking
-- **Binary tree visualization** with top-down layout and node traversal highlighting
-- **Variable inspector** showing all variable states at each step
-- **Pattern detection** — identifies Two Pointer, Sliding Window, BFS, DFS, Binary Search, DP, and more
-- **Execution controls** — play, pause, step forward/back, speed control
-- **Gutter annotations** — variable values shown inline next to your code in the editor
+```sh
+npm ci
+npm run build
+```
 
----
+Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select this repository's `dist/` folder. Open a LeetCode problem, select Python, open LeetTrace using its floating button or extension icon, then click **Trace** in the panel.
+
+After changing code, rebuild and reload the extension. Reload the LeetCode tab if testing content-script or Monaco-bridge changes. `npm run dev` starts the Vite development server.
+
+## How to read a trace
+
+A **line** snapshot shows values **before that line executes**. Call and return steps show entry and exit from a function. Amber local values changed within that function invocation; a node-reference label shows where a variable points in a diagram. At the last step, **Solution output** is the return value for the example that was run, not a LeetCode submission verdict.
+
+Click **View … diagram** beside a structure value to find its visualization. Expand a structure's header to reopen a collapsed card. A heap preserves its array positions rather than sorting values for display. Trees initially show six levels; deeper captured nodes can be expanded.
 
 ## Architecture
 
-LeetTrace has three components that communicate via Chrome's message passing API:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    LeetCode Problem Page                      │
-│                                                              │
-│  ┌─────────────────┐    messages    ┌──────────────────────┐ │
-│  │  Content Script  │◄────────────►│     Side Panel        │ │
-│  │                  │               │     (React App)       │ │
-│  │  • Read editor   │               │                      │ │
-│  │  • FAB button    │               │  • Visualizers       │ │
-│  │  • Gutter badges │               │  • Controls          │ │
-│  └────────┬─────────┘               │  • Variable table    │ │
-│           │                         │  • Pattern badge     │ │
-│           │ messages                └──────────┬───────────┘ │
-│           │                                    │             │
-│           ▼                                    ▼             │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Background Service Worker                   │ │
-│  │                                                         │ │
-│  │  • Pyodide (Python in WebAssembly)                      │ │
-│  │  • AST code instrumentation                             │ │
-│  │  • Snapshot generation                                  │ │
-│  │  • Pattern detection                                    │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
+```text
+Side panel <-> background service worker <-> offscreen document <-> Pyodide Web Worker
+                    |
+              content script <-> page-world Monaco bridge
 ```
 
-### Content Script
-Injected into `leetcode.com/problems/*` pages. Reads code from LeetCode's Monaco editor, injects the floating "Trace" button, and renders gutter annotations showing variable values next to code lines.
+The service worker routes messages and opens the panel. The offscreen document owns a dedicated worker; Python execution therefore cannot block its timeout handling. The Python tracer captures state with `sys.settrace`, builds annotated tree/list inputs, and analyzes the AST. TypeScript reconstructs the call stack and attaches structure pointers.
 
-### Side Panel
-A React app that opens in Chrome's Side Panel API. Contains all visualizations (array, hashmap, linked list, tree), execution controls (play/pause/step/speed), the variable inspector table, and pattern detection badges.
-
-### Background Service Worker
-Loads Pyodide (Python-in-WebAssembly) to execute user code. Uses Python's `sys.settrace` hook to capture variable state at every line execution — no code rewriting needed. Generates an array of snapshots that the side panel renders.
-
----
-
-## How It Works
-
-1. User writes Python code in LeetCode's editor
-2. User clicks the **Trace** button (floating action button)
-3. Content script extracts code from Monaco editor
-4. Background worker **traces** the code using Python's `sys.settrace` — a built-in hook that fires on every line execution, capturing all local variables automatically
-5. Pyodide executes the traced code, collecting **snapshots** (variable values, data structure states, pointer positions) at each step
-6. Snapshots are sent to the side panel
-7. Side panel **renders visualizations** and the user can step through them
-
-### Snapshot Schema
-
-Each execution step produces one snapshot:
-
-```typescript
-{
-  step: number           // Step index
-  line: number           // Which line of user code
-  variables: {           // All variable values
-    [name]: { value, type, changed }
-  }
-  dataStructures: [{     // Detected visualizable structures
-    id: string
-    type: "array" | "linked_list" | "tree" | "hashmap" | "matrix"
-    data: any
-    pointers: [{ name, index, color }]
-  }]
-  highlights: [{         // Which elements to animate
-    structureId, indices, type: "compare" | "swap" | "visit" | ...
-  }]
-}
+```text
+src/background/service-worker.ts     Message routing and injection recovery
+src/content/                        Extraction, floating button, editor annotations
+public/monaco-bridge.js              Access to Monaco and model-change notifications
+src/offscreen/tracer.py              Python tracing, serialization, inputs, pattern scoring
+src/offscreen/pyodide-worker.ts      Pyodide execution and result processing
+src/offscreen/pyodide-host.ts        Worker lifetime and execution budgets
+src/offscreen/snapshot-builder.ts   Structure routing, pointers, call stacks
+src/panel/                          React 19 UI and reducer
+src/shared/types.ts                 Shared message and snapshot contract
+manifest.config.js                  Chrome MV3 configuration
+tests/                             TypeScript, Python, and visual fixtures
 ```
 
----
+## Verification
 
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Extension | Chrome Manifest V3 |
-| Side Panel UI | React 18 + Vite |
-| Build | CRXJS Vite Plugin |
-| Styling | Tailwind CSS |
-| Visualization | Canvas API + SVG |
-| Python Execution | Pyodide (WebAssembly) |
-| Code Tracing | Python `sys.settrace` via Pyodide |
-| State Management | React Context + useReducer |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Node.js** 18+ and **npm**
-- **Google Chrome** (or Chromium-based browser)
-- **Git**
-
-### Setup
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/<your-username>/leettrace.git
-cd leettrace
-
-# 2. Install dependencies
-npm install
-
-# 3. Start development build (with watch mode)
-npm run dev
-
-# 4. Load the extension in Chrome:
-#    a. Go to chrome://extensions
-#    b. Enable "Developer mode" (top right toggle)
-#    c. Click "Load unpacked"
-#    d. Select the dist/ folder in this project
-
-# 5. Go to any LeetCode problem page
-#    You should see the LeetTrace FAB button (bottom right)
-```
-
-### Development Workflow
-
-```bash
-# Watch mode — rebuilds on file changes
-npm run dev
-
-# Production build
+```sh
+npm run lint
 npm run build
-
-# After making changes:
-# 1. Save your files (watch mode auto-rebuilds)
-# 2. Go to chrome://extensions
-# 3. Click the refresh icon on the LeetTrace extension
-# 4. Reload the LeetCode tab
+npm test
+npm run test:tracer
+npm run smoke:pyodide
+npm run gallery
 ```
 
-### Project Structure
+The gallery writes `tests/dev/gallery.html`, including a full panel fixture based on the binary-tree example. Build first so it includes current styles.
 
-```
-leettrace/
-├── manifest.json                  # Chrome extension config
-├── package.json
-├── vite.config.ts                 # Vite + CRXJS build config
-├── tailwind.config.js
-├── tsconfig.json
-│
-├── src/
-│   ├── background/
-│   │   ├── index.ts               # Service worker entry + message routing
-│   │   ├── pyodide-runner.ts      # Pyodide lifecycle + code execution
-│   │   └── tracer.py              # Python sys.settrace hook + serialization
-│   │
-│   ├── content/
-│   │   ├── index.ts               # Content script entry + message listener
-│   │   ├── editor-hook.ts         # Monaco editor code extraction
-│   │   ├── gutter.ts              # Inline variable annotations
-│   │   ├── fab.ts                 # Floating action button
-│   │   └── styles.css             # Injected CSS for FAB + gutter
-│   │
-│   ├── panel/
-│   │   ├── index.html             # Side panel HTML shell
-│   │   ├── main.tsx               # React entry
-│   │   ├── App.tsx                # Main layout
-│   │   ├── store/
-│   │   │   └── TraceContext.tsx    # useContext + useReducer state management
-│   │   ├── components/
-│   │   │   ├── Controls.tsx       # Play/pause/step/speed
-│   │   │   ├── VariableInspector.tsx
-│   │   │   ├── PatternBadge.tsx
-│   │   │   └── visualizers/
-│   │   │       ├── ArrayViz.tsx
-│   │   │       ├── LinkedListViz.tsx
-│   │   │       ├── TreeViz.tsx
-│   │   │       ├── HashMapViz.tsx
-│   │   │       ├── MatrixViz.tsx
-│   │   │       └── StackQueueViz.tsx
-│   │   └── hooks/
-│   │       └── useExecution.ts    # Execution lifecycle + auto-play timer
-│   │
-│   └── shared/
-│       ├── types.ts               # Shared TypeScript types (the contract)
-│       └── constants.ts           # Colors, limits, config
-│
-└── public/
-    └── icons/                     # Extension icons
-```
+Live Chrome checks are still required on LeetCode: trace one example per structure, scroll the editor, edit while tracing, navigate between problems, reload the extension, test the floating-button fallback, and inspect a runtime failure. Automated DOM tests and headless gallery checks do not replace those integrations.
 
----
+## Limits and remaining work
 
-## Issues and How to Pick Work
+- Python/Python3 and the first public `Solution` method are the supported entry point. Scraped examples and annotation-based input builders do not cover every custom problem interface.
+- Execution has time/event/snapshot budgets. Trees retain up to 11 serialized levels; expanding the diagram shows captured data only.
+- Monaco access and example extraction depend on LeetCode's page structure. The line-number rail is preferred for annotations, with absolute line-position math as a fallback.
+- Pattern detection can miss unfamiliar implementations or classify mixed algorithms imperfectly.
+- Graph visualization remains an optional stretch feature; adjacency maps still have the hash-map view.
+- Custom input editing, other languages, persistent traces, and contest pages remain outside v1 scope.
 
-There are 7 issues, ordered from foundation to finish. **Pick any issue whose dependencies are merged.** After Issue #1, Issues #2, #3, and #4 can all be worked on in parallel by different people.
-
-| Issue | What | Dependencies | Can work in parallel with |
-|-------|------|-------------|--------------------------|
-| #1 | Project setup, manifest, shared types | None | — |
-| #2 | Content script (editor hook, FAB, gutter) | #1 | #3, #4 |
-| #3 | Background worker (Pyodide + sys.settrace) | #1 | #2, #4 |
-| #4 | Side panel (React app, store, controls) | #1 | #2, #3 |
-| #5 | Array and hashmap visualizers | #4 | #2, #3 |
-| #6 | Linked list and tree visualizers | #5 | #2, #3 |
-| #7 | End-to-end integration + polish | #2, #3, #4, #5 | — |
-
-### How to Collaborate
-
-1. **Do Issue #1 together** — set up the repo and agree on the shared types. These types are the contract between all components.
-2. **Pick issues freely after that.** Issues #2, #3, and #4 are independent — you can each grab one and work in parallel.
-3. **Test independently using mocks:** whoever works on the side panel (#4, #5, #6) can use hardcoded mock snapshot data in a `mockData.ts` file. Whoever works on the background worker (#3) can test by logging snapshots to console. The shared `Snapshot` type is what connects everything.
-4. **Issue #7 is done together** — that's where you connect the pieces and test the full flow.
-
-### Git Workflow
-
-```
-main (protected)
-  └── dev
-       ├── feature/issue-1-setup
-       ├── feature/issue-2-content-script
-       ├── feature/issue-3-background
-       └── ...
-```
-
-- Branch off `dev` for each issue
-- Open PRs to `dev`, get reviewed by the other person
-- Merge `dev` → `main` when milestones are complete
-
----
-
-## Key Concepts to Learn
-
-If you're new to any of these, here are starting points:
-
-- **Chrome Extension Development (MV3)**: https://developer.chrome.com/docs/extensions/develop
-- **Chrome Side Panel API**: https://developer.chrome.com/docs/extensions/reference/api/sidePanel
-- **Content Scripts**: https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts
-- **Message Passing**: https://developer.chrome.com/docs/extensions/develop/concepts/messaging
-- **Pyodide (Python in browser)**: https://pyodide.org/en/stable/
-- **Python sys.settrace**: https://docs.python.org/3/library/sys.html#sys.settrace
-- **React useReducer**: https://react.dev/reference/react/useReducer
-- **CRXJS Vite Plugin**: https://crxjs.dev/vite-plugin
-- **Canvas API**: https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API
-- **SVG basics**: https://developer.mozilla.org/en-US/docs/Web/SVG
-
----
-
-## Known Gotchas
-
-1. **Monaco access**: Content scripts run in an isolated world and can't access `window.monaco` directly. You need to inject a page-level `<script>` tag and use `window.postMessage` to communicate back.
-2. **Pyodide size**: ~10MB first download. Subsequent loads use browser cache. Always show a loading state.
-3. **Service worker lifecycle**: MV3 service workers die after 5 min idle. Pyodide state is lost. Always check if Pyodide is initialized before each execution and reinitialize if needed.
-4. **LeetCode DOM**: Class names are hashed (CSS modules). Use structural selectors (`.monaco-editor`, `.view-lines`), not class names.
-5. **sys.settrace**: The callback MUST return itself to keep tracing. Returning `None` stops tracing. Filter on `frame.f_code.co_filename == '<exec>'` to avoid tracing into stdlib.
-6. **Large inputs**: Cap at 5000 snapshots. Virtualize long arrays in the UI.
-
----
-
-## License
-
-MIT
+See [DESIGN.md](docs/DESIGN.md) for the design and historical audit, and [PROGRESS.md](docs/PROGRESS.md) for current verification and handoff notes.

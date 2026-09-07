@@ -133,6 +133,7 @@ const VALID_BST = `class Solution:
   // run() already does JSON.parse, so reaching this line at all is the test.
   const bst = run(VALID_BST, ['root = [2,1,3]']);
   check('no error', bst.error === null, bst.error);
+  check('AST pattern survives Pyodide envelope', bst.pattern?.type === 'dfs', bst.pattern);
   check('returnValue true', bst.returnValue === true, bst.returnValue);
   const bounds = new Set();
   for (const s of bst.snapshots) {
@@ -160,6 +161,7 @@ check('finished quickly (<20s)', ms < 20000, ms + 'ms');
 console.log('runtime error (B9 line clamp)');
 r = run(BOOM, ['nums = [1,2,3]']);
 check('error reported', r.error !== null, r.error);
+check('partial state retained', r.snapshots.length > 0 && r.snapshots.some(s => s.line === 6), r.snapshots.length);
 check('line 6', r.error && r.error.line === 6, r.error);
 check('line within user code', r.error && r.error.line <= BOOM.split('\n').length, r.error);
 

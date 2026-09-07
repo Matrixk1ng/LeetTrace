@@ -12,29 +12,19 @@
 - [x] **M3 — Pointer correctness** (B3 AST index mapping, stable colors, matrix + node pointers)
 - [x] **M4 — Visualizers wave 1** (MatrixViz, StackViz, QueueViz, SetViz, string-as-array, B17)
 - [x] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
-- [ ] **M6 — Patterns v2** (AST-based detector)
-- [ ] **M7 — Editor mirroring** (B5, B6, B16)
-- [ ] **M8 — Polish** (scrubber, B14, collapsible cards, windowing, notices, HeapViz, B18 README; GraphViz stretch)
+- [x] **M6 — Patterns v2** (AST-based detector)
+- [x] **M7 — Editor mirroring** (B5, B6, B16)
+- [x] **M8 — Polish** (scrubber, B14, collapsible cards, windowing, notices, HeapViz, B18 README; GraphViz stretch)
 
 ## 2. Current state
 
-- **Next task:** Start M6 — patterns v2. Replace the regex `detectPattern` in
-  `src/offscreen/pattern-detect.ts` (which still carries every B11 misfire)
-  with the AST scorer in DESIGN.md §7, written in `src/offscreen/tracer.py`
-  where `ast` is already imported and `_analyze_usage` / `_analyze_indexing`
-  give a template to follow. Score every pattern in §3's list rather than
-  first-match, return the best with a confidence, and surface it on the result
-  envelope next to `indexing` so the worker stops calling `detectPattern(code)`
-  in TypeScript. Pin the signals with a pytest file per pattern.
-- **Active branch:** `feature/m5-visualizers`, stacked on `feature/m4-visualizers`
-  (M4 is [#18](https://github.com/Matrixk1ng/LeetTrace/pull/18), still open).
-- **Merged:** [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15),
-  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16),
-  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) landed on `main`
-  on 2026-09-05.
-- **Open PRs:** [#18 — M4](https://github.com/Matrixk1ng/LeetTrace/pull/18) → base `main`;
-  M5 opens next → base `feature/m4-visualizers`. **Ask before merging to `main`.**
-- **Blocked on:** nothing.
+- **Next task:** Live Chrome / LeetCode integration checks listed below. M6–M8
+  implementation is complete locally; GraphViz remains an optional stretch.
+- **Active branch:** `feature/trace-experience`, based on `main` at `e88f542`.
+  Changes are local and uncommitted; no PR opened and nothing merged this session.
+- **Reconciled:** M4 (#18), M5 (#19), and non-finite float handling (#20) are
+  already merged into main. The previous branch/open-PR handoff was stale.
+- **Blocked on:** no implementation blocker. Live LeetCode integration remains unverified.
 
 ### Verification gates
 
@@ -42,12 +32,44 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 97 passed |
-| `npm run test:tracer` (pytest) | 83 passed |
+| `npm test` (vitest) | 105 passed |
+| `npm run test:tracer` (pytest) | 116 passed |
 | `npm run smoke:pyodide` | all pass |
 | `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### 2026-09-07 — M6–M8 implementation and readable trace experience
+
+- **M6:** Python AST scorer evaluates all 13 pattern families; worker uses the
+  result envelope, obsolete regex detector removed. One positive fixture file
+  per pattern, plus negative/comment/string/buffer cases and 2-D DP. A fixture
+  caught the common `prefix[i+1] = prefix[i] + value` shape; fixed.
+- **M7:** document-line matching uses the visible line-number rail, then absolute
+  top/line-height fallback. Scroll/resize/virtualization reposition the active
+  annotation instead of clearing it. Monaco content/model/disposal notifications
+  and editor input mark a trace stale. Panel preserves edits received during a
+  running request. Floating-button rejection now shows an actionable toolbar hint.
+- **M8:** timeline, keyboard controls, Play-at-end restart, collapsible cards,
+  60-item array windows with pointer following and paging, HeapViz, six-level
+  tree disclosure, previous-cursor tree highlight, budget/staleness notices,
+  printed output, and runtime-error state inspection.
+- **Screenshot feedback:** shared readable formatting for panel/editor badges;
+  hide `self` and function objects, retain useful `self.field` values. Tree/list
+  references summarize their meaning and link to the owning diagram. Current
+  function, before-line semantics, and final output get a dedicated card.
+  Trees are larger and centered; long values wrap rather than overflow a table.
+- **Verification:** lint/build, 105 TS tests, 116 Python tests, real-Pyodide
+  smoke checks, and gallery generation. Headless Chrome screenshot inspected
+  at 400px panel width, including the user's `root/self/dfs/True` case.
+  Generated preview: `tests/dev/gallery.png` (gitignored).
+- **Live checks still needed:** BST recursion and bounds; heap/queue/list examples;
+  scroll, wrap/fold, resize, editor replacement and SPA navigation; edit during
+  tracing; exception inside a helper; extension reload; floating-button fallback.
+  Headless gallery rendering does not verify the extension/LeetCode integration.
+- **Exact next step:** load `dist/` in Chrome, run that checklist, and record any
+  selector/model-binding differences before treating v1 as release-verified.
+
 
 ### 2026-09-07 — M5 complete (visualizers wave 2)
 
@@ -306,6 +328,22 @@ every step of a `Solution` method (pre-existing; it eats a gutter badge slot).
 Fix belongs with the variable-display work in M4/M8.
 
 ## 4. Deviations from the design doc
+
+- **M6–M8 delivered as one local feature branch**, matching this session's combined
+  completion/UX request. No milestone PRs or merges were created.
+- **M7:** model content/replacement/disposal subscriptions supply staleness rather
+  than polling version IDs. The visible number rail is preferred over absolute
+  top math for folded/wrapped lines; the math remains the fallback.
+- **Error transport:** `ExecutionError.trace?` carries processed partial snapshots.
+  The reducer selects the last snapshot at the reported error line, and the error
+  notice persists during playback.
+- **Tree trail:** highlight the previous navigated cursor position, not a cumulative
+  visited set (a cursor position alone does not prove a node was processed).
+  UI expansion is bounded by the tracer's existing 11 serialized levels.
+- **Greedy:** sorted traversal with conditional local selection is a low-confidence
+  hint. Pattern scores are heuristic evidence, not calibrated probabilities.
+- **GraphViz** remains deferred as the explicitly optional stretch feature.
+
 
 - **M5: `Snapshot.callStack` added to schema v2.** DESIGN.md §4's Snapshot
   carries `frameId`/`frameName`/`callDepth` for the *current* frame only, which

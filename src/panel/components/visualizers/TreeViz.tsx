@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import type { DataStructureState, NodePointer } from '../../../shared/types';
 import { formatValue, truncate } from './format';
 
 interface TreeVizProps {
   dataStructure: DataStructureState;
+  previousDataStructure?: DataStructureState | null;
 }
 
 interface SerializedNode {
@@ -15,16 +17,17 @@ interface SerializedNode {
 interface Placed {
   /** Pre-order position — the index NodePointer.nodeIndex refers to. */
   order: number;
+  id?: string;
   x: number;
   y: number;
   label: string;
   parent: Placed | null;
 }
 
-const RADIUS = 14;
-const X_GAP = 34;
-const Y_GAP = 46;
-const PADDING = 16;
+const RADIUS = 19;
+const X_GAP = 50;
+const Y_GAP = 64;
+const PADDING = 34;
 
 /**
  * Lay the tree out top-down.
@@ -34,7 +37,7 @@ const PADDING = 16;
  * *pre-order* counter is tracked separately because that's the order node ids
  * are serialized in, and therefore what `nodePointers` index into.
  */
-function layout(root: SerializedNode | null): Placed[] {
+function layout(root: SerializedNode | null, maxDepth: number): Placed[] {
   const placed: Placed[] = [];
   let column = 0;
   let order = 0;
@@ -44,15 +47,16 @@ function layout(root: SerializedNode | null): Placed[] {
 
     const entry: Placed = {
       order: order++,
+      id: node.id,
       x: 0,
       y: depth,
       label: formatValue(node.val),
       parent,
     };
-    placed.push(entry);
+    if (depth < maxDepth) placed.push(entry);
 
     walk(node.left, depth + 1, entry);
-    entry.x = column++;
+    if (depth < maxDepth) entry.x = column++;
     walk(node.right, depth + 1, entry);
   };
 
@@ -60,9 +64,16 @@ function layout(root: SerializedNode | null): Placed[] {
   return placed;
 }
 
-export default function TreeViz({ dataStructure }: TreeVizProps) {
+export default function TreeViz({ dataStructure, previousDataStructure }: TreeVizProps) {
+  const [expanded, setExpanded] = useState(false);
   const root = (dataStructure.data as { root?: SerializedNode | null })?.root ?? null;
-  const nodes = layout(root);
+  const allNodes = layout(root, Infinity);
+  const nodes = expanded ? allNodes : layout(root, 6);
+  const previousRoot = (previousDataStructure?.data as { root?: SerializedNode | null } | undefined)?.root ?? null;
+  const previousNodes = layout(previousRoot, Infinity);
+  const previousCursorIds = new Set((previousDataStructure?.nodePointers ?? [])
+    .map(p => previousNodes.find(n => n.order === p.nodeIndex)?.id).filter(Boolean));
+  const hidden = allNodes.length - nodes.length;
 
   if (nodes.length === 0) {
     return <div className="font-mono text-sm text-trace-text-muted">None</div>;
@@ -85,7 +96,7 @@ export default function TreeViz({ dataStructure }: TreeVizProps) {
 
   return (
     <div className="overflow-x-auto pb-1">
-      <svg width={width} height={height} role="img" aria-label={`tree with ${nodes.length} nodes`}>
+      <svg className="mx-auto" width={width} height={height} role="img" aria-label={`tree with ${nodes.length} nodes`}>
         {/* Edges first, so the circles sit on top of them. */}
         {nodes.map((node) =>
           node.parent ? (
@@ -103,7 +114,7 @@ export default function TreeViz({ dataStructure }: TreeVizProps) {
 
         {nodes.map((node) => {
           const cursors = cursorsByOrder.get(node.order) ?? [];
-          const accent = cursors[0]?.color;
+          const accent = cursors[0]?.color ?? (node.id && previousCursorIds.has(node.id) ? '#fbbf24' : undefined);
 
           return (
             <g key={`node-${node.order}`}>
@@ -120,7 +131,7 @@ export default function TreeViz({ dataStructure }: TreeVizProps) {
                 y={cy(node) + 4}
                 textAnchor="middle"
                 fill="#e6e6e6"
-                style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}
+                style={{ fontSize: 13, fontFamily: 'ui-monospace, monospace' }}
               >
                 {truncate(node.label, 4)}
               </text>
@@ -143,6 +154,12 @@ export default function TreeViz({ dataStructure }: TreeVizProps) {
         })}
       </svg>
 
+      {allNodes.some(n => n.y >= 6) ? <button type="button" className="my-2 text-xs text-trace-accent" onClick={() => setExpanded(!expanded)}>
+        {expanded ? 'Show first 6 levels' : 'Expand ' + hidden + ' deeper nodes'}
+      </button> : null}
+      <p className="text-xs text-trace-text-secondary mb-2">Top node = root · branches lead to left and right children.
+        {(dataStructure.nodePointers?.length ?? 0) > 0 ? ' Labels show where node variables point.' : ''}
+        {previousCursorIds.size > 0 ? ' Amber marks the previous cursor.' : ''}</p>
       <div className="text-trace-text-muted" style={{ fontSize: 10 }}>
         {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'} · depth {depth}
       </div>

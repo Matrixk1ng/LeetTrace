@@ -47,6 +47,18 @@
     return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
   };
 
+  const watchModel = (model, editor) => {
+    if (!model) return;
+    window.__leettraceModelWatch?.dispose();
+    const changed = () => window.postMessage({ type: 'LEETTRACE_MODEL_CHANGED' }, window.location.origin);
+    const subscriptions = [
+      model.onDidChangeContent?.(changed),
+      model.onWillDispose?.(changed),
+      editor?.onDidChangeModel?.(changed),
+    ];
+    window.__leettraceModelWatch = { dispose: () => subscriptions.forEach(s => s?.dispose()) };
+  };
+
   const getEditorValue = (editor) => {
     if (!editor) {
       return null;
@@ -82,6 +94,9 @@
 
     for (const editor of editors) {
       let score = 0;
+      // Testcase editors may own focus. Prefer the actual Python solution model.
+      const language = editor.getModel?.()?.getLanguageId?.();
+      if (language === 'python' || language === 'python3') score += 300;
       const domNode = typeof editor.getDomNode === 'function' ? editor.getDomNode() : null;
 
       if (isVisibleElement(domNode)) {
@@ -137,6 +152,7 @@
 
       try {
         const lang = typeof model.getLanguageId === 'function' ? model.getLanguageId() : '';
+        if (lang === 'python' || lang === 'python3') score += 300;
         if (lang && lang !== 'plaintext') {
           score += 6;
         }
@@ -147,6 +163,7 @@
       if (score > bestScore) {
         bestScore = score;
         bestValue = value;
+        watchModel(model);
       }
     }
 
@@ -187,6 +204,7 @@
             const bestEditor = selectBestEditor(editors);
             const editorValue = getEditorValue(bestEditor);
             if (typeof editorValue === 'string' && editorValue.length > 0) {
+              watchModel(bestEditor.getModel?.(), bestEditor);
               return editorValue;
             }
           }
