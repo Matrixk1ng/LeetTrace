@@ -10,30 +10,30 @@
 - [x] **M1 — Hardening** (worker + interrupts B1, input builders B2, injection fallback B7, B9, B10, B12 types v2, B15, pytest scaffolding)
 - [x] **M2 — Serialization + routing** (B4 dict/list families + deque/set/heap tags, B13, schema v2 fields, B8 per-frame changed)
 - [x] **M3 — Pointer correctness** (B3 AST index mapping, stable colors, matrix + node pointers)
-- [ ] **M4 — Visualizers wave 1** (MatrixViz, StackViz, QueueViz, SetViz, string-as-array, B17)
-- [ ] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
+- [x] **M4 — Visualizers wave 1** (MatrixViz, StackViz, QueueViz, SetViz, string-as-array, B17)
+- [x] **M5 — Visualizers wave 2** (LinkedListViz, TreeViz, CallStackViz)
 - [ ] **M6 — Patterns v2** (AST-based detector)
 - [ ] **M7 — Editor mirroring** (B5, B6, B16)
 - [ ] **M8 — Polish** (scrubber, B14, collapsible cards, windowing, notices, HeapViz, B18 README; GraphViz stretch)
 
 ## 2. Current state
 
-- **Next task:** Start M4 — visualizers wave 1. All the data these need now
-  exists: `MatrixViz` (pointers carry `cell`, with `col === -1` meaning a row
-  cursor and `row === -1` a column cursor; a `current` highlight marks the
-  flattened crossing cell), `StackViz`/`HeapViz`-shaped kinds (`kind` on the
-  structure), `QueueViz`/`SetViz` (`{__type, items}` payloads),
-  string-as-char-array, and B17 (HashMapViz should highlight *changed values*,
-  not only new keys, and compare direction-agnostically so stepping backwards
-  doesn't mark the previous step's entry as new). Build each against a
-  `mockData.ts` fixture first (DESIGN.md §10). **Remove the interim
-  `SEQUENCE_KINDS` fallback in `VizRouter.tsx` as each real visualizer lands.**
-- **Active branch:** `feature/m3-pointers`, stacked on `feature/m2-serialization`.
-- **Open PRs (stacked, merge in order):**
-  [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15) → base `main`;
-  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16) → base `feature/m1-hardening`;
-  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) → base `feature/m2-serialization`.
-  **None merged — ask before merging to `main`.**
+- **Next task:** Start M6 — patterns v2. Replace the regex `detectPattern` in
+  `src/offscreen/pattern-detect.ts` (which still carries every B11 misfire)
+  with the AST scorer in DESIGN.md §7, written in `src/offscreen/tracer.py`
+  where `ast` is already imported and `_analyze_usage` / `_analyze_indexing`
+  give a template to follow. Score every pattern in §3's list rather than
+  first-match, return the best with a confidence, and surface it on the result
+  envelope next to `indexing` so the worker stops calling `detectPattern(code)`
+  in TypeScript. Pin the signals with a pytest file per pattern.
+- **Active branch:** `feature/m5-visualizers`, stacked on `feature/m4-visualizers`
+  (M4 is [#18](https://github.com/Matrixk1ng/LeetTrace/pull/18), still open).
+- **Merged:** [#15 — M1](https://github.com/Matrixk1ng/LeetTrace/pull/15),
+  [#16 — M2](https://github.com/Matrixk1ng/LeetTrace/pull/16),
+  [#17 — M3](https://github.com/Matrixk1ng/LeetTrace/pull/17) landed on `main`
+  on 2026-09-05.
+- **Open PRs:** [#18 — M4](https://github.com/Matrixk1ng/LeetTrace/pull/18) → base `main`;
+  M5 opens next → base `feature/m4-visualizers`. **Ask before merging to `main`.**
 - **Blocked on:** nothing.
 
 ### Verification gates
@@ -42,11 +42,102 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 42 passed |
+| `npm test` (vitest) | 97 passed |
 | `npm run test:tracer` (pytest) | 83 passed |
 | `npm run smoke:pyodide` | all pass |
+| `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### 2026-09-07 — M5 complete (visualizers wave 2)
+
+Every structure kind in DESIGN.md §3 now has a real visualizer. Only `graph`
+(the M8 stretch goal) still reaches the JSON fallback.
+
+- **LinkedListViz** — the chain with the cursors sitting *on* it. This is the
+  payoff for M3's `collapseNodeAliases`: `slow`, `fast` and `curr` each
+  serialize as a whole list of their own, and folding them into `nodePointers`
+  is what turns three overlapping copies of the same nodes into one chain with
+  three labelled positions. A cycle shows an `↩` tail and names the index it
+  links back to; an acyclic list ends in `→ None`.
+- **TreeViz** — SVG, top-down. x from an in-order walk and y from depth, which
+  keeps subtrees from overlapping without a full tree-layout algorithm. The
+  **pre-order** counter is tracked separately, because that is the order node
+  ids are serialized in and therefore what `nodePointers` index into — mixing
+  the two would put every cursor on the wrong node.
+- **CallStackViz** — innermost frame on top, indented, pinned above the
+  structure cards in `App.tsx` when depth > 1 (DESIGN.md §8). This is what
+  makes a recursive trace readable at all; without it a DFS looks like the same
+  few lines firing forever with no sense of depth.
+
+**One thing needed building first.** A snapshot carries only its *own* frame,
+so the enclosing frames can't be read off it. `processSnapshots` (new, wraps
+the existing per-snapshot mapping) replays the call/return event stream in
+order to reconstruct the stack, and attaches a copy to each snapshot as
+`Snapshot.callStack`. It resyncs rather than assuming — a budget can cut a
+trace mid-unwind, so the frame a step belongs to may sit below the recorded
+top. Module and class-body frames are excluded; they aren't calls the user
+made.
+
+**Checked with `npm run gallery`** — the linked-list cycle indicator, the tree
+layout (no overlapping subtrees, cursor on the right node) and the call-stack
+ordering were all verified visually there before committing.
+
+**Not verified — needs a human at `chrome://extensions`** (on top of the
+M1–M4 lists): trace *Linked List Cycle* and watch `slow`/`fast` converge on one
+chain; trace *Invert Binary Tree* or a level-order traversal and watch the tree
+redraw per step; trace *Subsets* and watch the call stack grow and shrink.
+
+### 2026-09-07 — M4 complete (visualizers wave 1)
+
+**New visualizers**, all driven by `mockData.ts` fixtures per DESIGN.md §10:
+
+- **MatrixViz** — grid with row cursors down the left rail and column cursors
+  across the top, reading the `cell` convention from M3 (`-1` marks the axis a
+  cursor doesn't move along). The crossing cell gets the `current` highlight.
+  Ragged rows keep their column alignment instead of collapsing left.
+- **StackViz** — top-first, since that's how people draw a stack; Python
+  appends to the end of the list so the render order is reversed. Push and pop
+  are called out by diffing against the previous step.
+- **QueueViz** — front-to-back with both ends labelled, and whichever end moved
+  called out. `popleft` is detected by the front *value* changing, not just the
+  length, so an append and a popleft in the same step don't read as nothing.
+- **SetViz** — chip cloud. Removed members stay on screen for one step, struck
+  through, so a `discard` doesn't silently vanish; a set has no order to walk,
+  so membership changing is the only thing worth animating.
+- **Strings as character arrays** — routed in `buildDataStructure`, but **only
+  when the code actually indexes the string** (the M3 indexing map is the
+  gate). Otherwise every message and label in a solution becomes a card.
+  Rendered as bare characters, not `"r"` — quoting spends a third of each cell
+  on punctuation.
+
+**B17 — two separate bugs, both fixed:**
+
+1. HashMapViz only highlighted *new keys*. The counting problems this view
+   exists for keep their keys and move their values, so nothing lit up at all
+   after the first pass. Entries are now `added` (green) / `changed` (amber) /
+   untouched.
+2. The diff was always against `currentStep - 1`, so stepping **backwards**
+   re-reported the step ahead as brand new. `TraceState` now tracks
+   `previousStep` — the step actually navigated away from — and `useTrace`
+   exposes `previousSnapshot`. VizRouter diffs against that.
+
+**Gallery.** DESIGN.md §10 asked for a fixture-driven dev route; it's real now:
+`npm run gallery` renders every visualizer against the fixtures and writes
+`tests/dev/gallery.html` (gitignored), inlining the panel's compiled CSS so it
+looks like the real thing. It runs under a standalone vitest config so it stays
+out of the normal test run. This is how the four new components were actually
+checked — worth using in M5, since the alternative is loading the extension for
+every tweak.
+
+**Lint config:** `react-refresh` is now scoped to `src/**`. It's a rule about
+Vite's HMR boundary, which doesn't exist for tests and generators.
+
+**Not verified — needs a human at `chrome://extensions`** (on top of the M1–M3
+lists): trace a BFS problem and watch the queue's front/back callouts and the
+set's add/remove diff during playback; trace a counting problem (`Counter`) and
+confirm changed values light up amber; step **backwards** and confirm the
+highlight follows the direction you moved.
 
 ### 2026-09-04 — M3 complete (pointer correctness)
 
@@ -215,6 +306,20 @@ every step of a `Solution` method (pre-existing; it eats a gutter badge slot).
 Fix belongs with the variable-display work in M4/M8.
 
 ## 4. Deviations from the design doc
+
+- **M5: `Snapshot.callStack` added to schema v2.** DESIGN.md §4's Snapshot
+  carries `frameId`/`frameName`/`callDepth` for the *current* frame only, which
+  is not enough to draw a call stack — the ancestors exist only in the
+  call/return event stream. `processSnapshots` reconstructs them once per trace
+  and attaches the list. DESIGN.md §4 updated.
+
+- **M4: `heap` still renders through ArrayViz.** HeapViz is M8; a heap is a
+  list and reads fine as one meanwhile. The M2 interim fallback is otherwise
+  gone — `VizRouter` now routes each kind to its own component, and only
+  `linked_list`/`tree` (M5) and `graph` (M8 stretch) reach the JSON dump.
+- **M4: added `@testing-library/react` + `jsdom`** so the visualizers have
+  behavioural tests rather than none. DESIGN.md §10 called for vitest but
+  didn't name a component-testing approach.
 
 - **M3: matrix pointer encoding.** DESIGN.md §4 said a matrix pointer's `index`
   addresses the flattened cell. Implemented instead as one pointer per axis

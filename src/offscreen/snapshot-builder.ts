@@ -10,6 +10,7 @@ import type {
   Highlight,
   NodePointer,
   Snapshot,
+  StackFrame,
   StructureKind,
   TraceEvent,
   VariableState,
@@ -79,7 +80,15 @@ const LIST_LIKE_TYPES = new Set(['list', 'tuple']);
 const USAGE_KINDS = new Set<StructureKind>(['heap', 'stack']);
 
 /** Kinds whose `data` is a flat sequence an index pointer can address. */
-const SEQUENCE_KINDS = new Set<StructureKind>(['array', 'stack', 'heap']);
+const SEQUENCE_KINDS = new Set<StructureKind>(['array', 'string', 'stack', 'heap']);
+
+/**
+ * Strings are only worth their own card when the code walks them like a
+ * sequence — a palindrome check reads much better as a row of characters with
+ * two cursors on it. A string nobody indexes stays an ordinary variable
+ * instead of turning every message and label into a card.
+ */
+const MAX_STRING_CELLS = 200;
 
 function taggedType(value: unknown): string | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -296,12 +305,55 @@ function collapseNodeAliases(dataStructures: DataStructureState[], context: Trac
 
 // ---------------------------------------------------------------------------
 
+/** The module frame isn't a call the user made — it's just where code lives. */
+const MODULE_FRAME = '<module>';
+
+/**
+ * Maps a whole trace, threading the call stack through it.
+ *
+ * A snapshot carries only its own frame, so the enclosing frames have to be
+ * recovered by replaying the call/return events in order — which is also the
+ * only place that information exists.
+ */
+export function processSnapshots(raws: RawSnapshot[], context: TraceContext): Snapshot[] {
+  const stack: StackFrame[] = [];
+
+  return raws.map((raw) => {
+    const tracked = raw.frameName !== MODULE_FRAME;
+
+    if (tracked) {
+      if (raw.event === 'call') {
+        stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line });
+      } else {
+        // Resync rather than assume: a budget can cut a trace mid-unwind, so
+        // the frame this step belongs to may sit below the recorded top.
+        const depth = stack.findIndex((frame) => frame.frameId === raw.frameId);
+        if (depth === -1) {
+          stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line });
+        } else {
+          stack.length = depth + 1;
+          stack[depth] = { ...stack[depth], line: raw.line };
+        }
+      }
+    }
+
+    const snapshot = processSnapshot(raw, context);
+    snapshot.callStack = stack.map((frame) => ({ ...frame }));
+
+    if (tracked && raw.event === 'return') {
+      stack.pop();
+    }
+
+    return snapshot;
+  });
+}
+
 export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapshot {
   const dataStructures: DataStructureState[] = [];
   const highlights: Highlight[] = [];
 
   for (const [name, variable] of Object.entries(raw.variables)) {
-    const ds = buildDataStructure(name, variable);
+    const ds = buildDataStructure(name, variable, context);
     if (ds) dataStructures.push(ds);
   }
 
@@ -321,6 +373,9 @@ export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapsh
     variables: raw.variables,
     dataStructures: sorted,
     highlights,
+    // Filled in by processSnapshots, which is the only caller that can see
+    // the surrounding events.
+    callStack: [],
     ...(raw.stdout ? { stdout: raw.stdout } : {}),
   };
 }
@@ -333,6 +388,7 @@ function group(dataStructures: DataStructureState[], context: TraceContext): Dat
 export function buildDataStructure(
   name: string,
   variable: VariableState,
+  context?: TraceContext,
 ): DataStructureState | null {
   const { value, type, kind } = variable;
 
@@ -367,6 +423,17 @@ export function buildDataStructure(
 
   if (DICT_LIKE_TYPES.has(type) && value !== null && typeof value === 'object') {
     return { id: name, type: 'hashmap', data: value, pointers: [] };
+  }
+
+  // 4. Strings, as character arrays — but only the ones the code indexes.
+  if (
+    type === 'str' &&
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_STRING_CELLS &&
+    context?.indexing[name]
+  ) {
+    return { id: name, type: 'string', data: Array.from(value), pointers: [] };
   }
 
   return null;

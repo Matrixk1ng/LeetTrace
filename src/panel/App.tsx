@@ -1,6 +1,7 @@
 import Controls from './components/Controls';
 import PatternBadge from './components/PatternBadge';
 import VariableInspector from './components/VariableInspector';
+import CallStackViz from './components/visualizers/CallStackViz';
 import VizRouter from './components/visualizers/VizRouter';
 import { useExecution } from './hooks/useExecution';
 import { useTrace } from './store/useTrace';
@@ -14,7 +15,7 @@ import './App.css';
  * 3. Visualization area (variable inspector for now)
  */
 function App() {
-  const { state } = useTrace();
+  const { state, currentSnapshot } = useTrace();
   const { requestTrace } = useExecution();
 
   const isIdle = state.status === 'idle';
@@ -81,6 +82,11 @@ function App() {
 
           {!isIdle && !isLoading && !isEmptyCompleted && !isError ? (
             <div className="flex flex-col gap-3">
+              {/* Pinned above the structures once recursion is in play — the
+                  frame you're in is the context for everything below it. */}
+              {(currentSnapshot?.callStack.length ?? 0) > 1 ? (
+                <CallStackViz frames={currentSnapshot!.callStack} />
+              ) : null}
               <VizRouter />
               <VariableInspector />
             </div>

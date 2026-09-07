@@ -27,6 +27,9 @@ export function useTrace() {
 
   const { state, dispatch } = context;
   const currentSnapshot = state.snapshots[state.currentStep] ?? null;
+  // The step we came *from* — see TraceState.previousStep (bug B17).
+  const previousSnapshot =
+    state.previousStep === null ? null : state.snapshots[state.previousStep] ?? null;
   const isAtStart = state.currentStep <= 0;
   const isAtEnd = state.totalSteps === 0 || state.currentStep >= state.totalSteps - 1;
 
@@ -34,6 +37,7 @@ export function useTrace() {
     state,
     dispatch,
     currentSnapshot,
+    previousSnapshot,
     isAtStart,
     isAtEnd,
   };

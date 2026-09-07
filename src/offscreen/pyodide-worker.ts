@@ -19,7 +19,7 @@ import { MAX_EVENTS, MAX_SNAPSHOTS } from '../shared/constants';
 import type { ExecutionError, TraceResult, WorkerRequest, WorkerResponse } from '../shared/types';
 import {
   createTraceContext,
-  processSnapshot,
+  processSnapshots,
   type RawTraceResult,
 } from './snapshot-builder';
 import { detectPattern } from './pattern-detect';
@@ -101,7 +101,7 @@ function execute(code: string, examples: string[]): TraceResult | ExecutionError
   const context = createTraceContext(raw.indexing);
 
   return {
-    snapshots: raw.snapshots.map((snapshot) => processSnapshot(snapshot, context)),
+    snapshots: processSnapshots(raw.snapshots, context),
     pattern: detectPattern(code),
     truncated: raw.truncated,
     ...(raw.limit ? { limit: raw.limit } : {}),

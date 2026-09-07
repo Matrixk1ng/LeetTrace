@@ -1,6 +1,6 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** v1.3 · 2026-09-04 (M1–M3 landed; §2–§6 and §10 reflect what shipped)
+**Status:** v1.5 · 2026-09-07 (M1–M5 landed; §2–§6, §8 and §10 reflect what shipped)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
@@ -68,7 +68,7 @@ Ordered by severity. File references are to current `main`.
 - **B14 — Play at the end does nothing.** `PLAY` at the last step immediately dispatches `PAUSE` (the auto-play effect sees `isAtEnd`). Users expect play-from-end to restart from step 0.
 - **B15 — `onInstalled` warm-up race.** `createDocument` resolves before `main.ts` necessarily registers its listener; the `WARMUP` message can miss. Caught + logged, but the pre-warm silently doesn't happen. Have the offscreen doc initiate (`initPyodide()` on load) instead of being told.
 - **B16 — `sidePanel.open` user-gesture fragility.** Opening from a content-script message usually keeps the gesture, but it's known-flaky; add error surfacing on the FAB (e.g. tooltip "click the extension icon") when it rejects.
-- **B17 — HashMapViz only highlights *new* keys**, not changed values; step-back shows the previous step's entry as "new" (comparison is always against `currentStep - 1`, even stepping backwards). Compare values too; treat direction-agnostic diffs.
+- **B17 — HashMapViz only highlights *new* keys**, not changed values; step-back shows the previous step's entry as "new" (comparison is always against `currentStep - 1`, even stepping backwards). **Fixed (M4)** as two separate problems: entries are now `added`/`changed`/untouched (counting problems keep their keys and move their values, so nothing lit up at all after the first pass), and `TraceState.previousStep` records the step actually navigated *away from*, which `useTrace` exposes as `previousSnapshot` — so stepping backwards diffs against where you came from.
 - **B18 — README drift.** File layout (`background/index.ts`, `tracer.py`), React 18 (actually 19), listed visualizer files that don't exist. Update once this doc lands.
 
 ---
@@ -87,18 +87,18 @@ LeetTrace v1.0 is done when, for any LeetCode problem solvable with a Python `So
 
 | Structure | Detect (tracer) | Serialize | Visualizer | Status |
 |---|---|---|---|---|
-| Array / list | ✅ | ✅ | ✅ ArrayViz | Done (fix B3 pointers) |
-| String (as sequence) | type `str` | as char array when indexed/pointed | ArrayViz variant | **New** |
-| HashMap / dict / Counter / defaultdict | ✅ (M2) dict *family* | ✅ | ✅ HashMapViz | Dict-likes routed (M2); changed-value highlight still open (B17, M4) |
-| Set / frozenset | ✅ (M2) | `{__type: 'set', items, frozen}` | SetViz (chip cloud, add/remove diff) | Serialized + routed (M2); viz **new** |
-| Matrix / 2-D grid | ✅ (M2, B13 fixed) | ✅ | MatrixViz (grid, row/col pointers, cell highlights) | Detection fixed (M2); viz **new** |
-| Linked list (`ListNode`) | ✅ | ✅ (+cycle flag) | LinkedListViz (node chain, `slow`/`fast`/`curr` node pointers, cycle indicator) | **New**; needs B2 input building |
-| Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped) | TreeViz (SVG top-down layout, current-node highlight, path trail) | **New**; needs B2 input building |
-| Stack (list used LIFO) | ✅ (M2) AST usage: `append` + no-arg `pop()` | list + `kind: 'stack'` | StackViz (vertical, top emphasized, push/pop animation) | Detected + routed (M2); viz **new** |
-| Queue / deque | ✅ (M2) | `{__type: 'deque', items}` | QueueViz (horizontal, front/back labels, popleft/append animation) | Serialized + routed (M2); viz **new** |
-| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); viz **new** |
+| Array / list | ✅ | ✅ | ✅ ArrayViz | **Done** (B3 pointers fixed in M3) |
+| String (as sequence) | ✅ (M4) `str` **and** in the M3 indexing map | char array | ✅ ArrayViz (bare chars) | **Done** (M4) |
+| HashMap / dict / Counter / defaultdict | ✅ (M2) dict *family* | ✅ | ✅ HashMapViz (added / changed / untouched) | **Done** (B17 fixed in M4) |
+| Set / frozenset | ✅ (M2) | `{__type: 'set', items, frozen}` | ✅ SetViz (chip cloud, add/remove diff) | **Done** (M4) |
+| Matrix / 2-D grid | ✅ (M2, B13 fixed) | ✅ | ✅ MatrixViz (grid, row/col cursors, crossing-cell highlight) | **Done** (M4) |
+| Linked list (`ListNode`) | ✅ | ✅ (+`nodeIds`, `has_cycle`, `cycleIndex`) | ✅ LinkedListViz (chain, node cursors, cycle indicator) | **Done** (M5) |
+| Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped, per-node `id`) | ✅ TreeViz (SVG top-down, in-order x / depth y, node cursors) | **Done** (M5) |
+| Stack (list used LIFO) | ✅ (M2) AST usage: `append` + no-arg `pop()` | list + `kind: 'stack'` | ✅ StackViz (vertical, top first, push/pop callouts) | **Done** (M4) |
+| Queue / deque | ✅ (M2) | `{__type: 'deque', items}` | ✅ QueueViz (front/back labels, popleft/append callouts) | **Done** (M4) |
+| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); reads as a list until HeapViz in **M8** |
 | Graph (adjacency dict/list) | dict of lists w/ node-like keys, or `defaultdict(list)` | dict | GraphViz (force/ring layout, visited coloring) | **New — stretch, ship last** |
-| Recursion / call stack | `call`/`return` events | frame list (name, line, args) | CallStackViz (frame stack; powers DFS/backtracking) | **New** |
+| Recursion / call stack | `call`/`return` events | `Snapshot.callStack` (name, line, frameId) | ✅ CallStackViz (pinned when depth > 1) | **Done** (M5) |
 
 **Structure identity across steps:** visualizers diff against the previous snapshot by `id` (variable name). Keep that, but add `kind` disambiguation so a variable that changes type mid-trace re-mounts cleanly.
 
@@ -132,6 +132,10 @@ interface Snapshot {
   frameId: string;                 // stable per invocation, for call-stack viz + per-frame `changed`
   frameName: string;               // e.g. "twoSum"
   callDepth: number;
+  // The user frames on the stack, outermost first. Reconstructed from the
+  // call/return event stream by processSnapshots — a snapshot carries only its
+  // own frame, so the ancestors can't be read off it.
+  callStack: StackFrame[];
   variables: Record<string, VariableState>;
   dataStructures: DataStructureState[];
   highlights: Highlight[];
@@ -154,7 +158,8 @@ type StructureKind =
 // with `cell` marking which axis it moves along (-1 on the other), and a
 // `current` highlight on the flattened crossing cell.
 interface Pointer { name: string; index: number; cell?: { row: number; col: number }; color: string }
-interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order)
+interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order — pre-order for trees)
+interface StackFrame { frameId: string; frameName: string; line: number }
 ```
 
 Messages get versioned in one union in `shared/types.ts`, all four contexts import it, and `examples`/`UPDATE_GUTTER` shapes are corrected (B12).
@@ -242,7 +247,7 @@ Suggested issue mapping: one GitHub issue per milestone bullet-group, labeled `P
 
 - **Python tracer tests (fastest ROI):** `tests/tracer/`, run with `npm run test:tracer`. The tracer lives at `src/offscreen/tracer.py` and is inlined into the worker with `?raw`, so pytest imports it directly under plain CPython: golden-snapshot tests per problem archetype — two-sum, reverse linked list, level-order traversal, LRU cache, binary search, subsets/backtracking, `while True` (must raise limit error), cyclic linked list, 5k-element input (truncation).
 - **TS unit tests (vitest):** `processSnapshot` pointer/highlight building, `buildDataStructure` family matching, reducer transitions, `detectPattern` fixtures.
-- **Fixture-driven visualizer dev:** a `mockData.ts` per structure kind + a dev-only panel route that renders visualizers from fixtures (already the README's intended workflow — make it real).
+- **Fixture-driven visualizer dev (live):** `src/panel/components/visualizers/mockData.ts` holds one fixture per structure kind, and `npm run gallery` renders every visualizer against them into `tests/dev/gallery.html` (gitignored), with the panel's compiled CSS inlined so it looks like the real card. Runs under a standalone vitest config so it stays out of the test run. Use it instead of reloading the extension for every tweak.
 - **Real-Pyodide smoke test:** `npm run smoke:pyodide` (`scripts/smoke-tracer.mjs`) runs the tracer under actual Pyodide in Node. It covers what CPython cannot — the `<exec>` compile filename, `runPython`/globals marshalling, and budgets unwinding in WASM — without needing Chrome, so it can gate a build.
 - **Manual E2E checklist** (until Playwright + CRX harness is worth it): one problem per structure kind, on both old and new LeetCode UIs, with editor scrolled, after extension reload, and after SPA navigation.
 
