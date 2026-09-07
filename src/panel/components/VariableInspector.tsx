@@ -1,6 +1,8 @@
 import type { VariableState } from '../../shared/types';
 import { useTrace } from '../store/useTrace';
 
+const NON_FINITE = new Set(['inf', '-inf', 'nan']);
+
 function formatBooleanLike(value: unknown): string {
   if (value === null) {
     return 'None';
@@ -24,7 +26,8 @@ function formatValue(value: unknown): string {
   }
 
   if (typeof value === 'string') {
-    return JSON.stringify(value);
+    // JSON has no infinity, so the tracer sends Python's spelling for those.
+    return NON_FINITE.has(value) ? value : JSON.stringify(value);
   }
 
   if (Array.isArray(value)) {

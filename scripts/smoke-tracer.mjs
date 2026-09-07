@@ -117,6 +117,34 @@ check('deque tagged', lastWith('queue')?.value?.__type === 'deque', lastWith('qu
 check('set tagged', lastWith('seen')?.value?.__type === 'set', lastWith('seen'));
 check('heap kind inferred', lastWith('heap')?.kind === 'heap', lastWith('heap'));
 
+console.log('float(inf) — output must be valid JSON for JSON.parse');
+const VALID_BST = `class Solution:
+    def isValidBST(self, root: Optional[TreeNode]) -> bool:
+        def dfs(node, low, high):
+            if not node:
+                return True
+            if not (low < node.val < high):
+                return False
+            return dfs(node.left, low, node.val) and dfs(node.right, node.val, high)
+
+        return dfs(root, float('-inf'), float('inf'))
+`;
+{
+  // run() already does JSON.parse, so reaching this line at all is the test.
+  const bst = run(VALID_BST, ['root = [2,1,3]']);
+  check('no error', bst.error === null, bst.error);
+  check('returnValue true', bst.returnValue === true, bst.returnValue);
+  const bounds = new Set();
+  for (const s of bst.snapshots) {
+    for (const name of ['low', 'high']) {
+      const v = s.variables[name];
+      if (v && typeof v.value === 'string') bounds.add(v.value);
+    }
+  }
+  check('inf bounds in Python spelling', bounds.has('inf') && bounds.has('-inf'), [...bounds]);
+  check('tree structure present', bst.snapshots.some(s => s.variables.root?.value?.__type === 'tree'), null);
+}
+
 console.log('infinite loop (B1 budgets)');
 const t0 = Date.now();
 r = run(SPIN, ['n = 1']);

@@ -27,6 +27,7 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
 import ast
 import collections
 import json
+import math
 import sys
 
 # --------------------------------------------------------------------------
@@ -137,7 +138,46 @@ class _StdoutCapture:
 # Serialization
 # --------------------------------------------------------------------------
 
+def _float_repr(v):
+    """Python's own spelling for a float JSON can't carry."""
+    if v != v:
+        return 'nan'
+    return 'inf' if v > 0 else '-inf'
+
+
+def _json_safe(obj):
+    """Last-resort sweep for non-finite floats (see _dump)."""
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return _float_repr(obj)
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(x) for x in obj]
+    return obj
+
+
+def _dump(result):
+    """Serialize the result as *strict* JSON.
+
+    allow_nan=False is the guard: Python's json.dumps otherwise emits bare
+    `Infinity` / `-Infinity` / `NaN`, which are not JSON and make the worker's
+    JSON.parse throw — losing the whole trace. Python's own json.loads accepts
+    them, so this only ever showed up in the browser.
+    """
+    try:
+        return json.dumps(result, allow_nan=False)
+    except ValueError:
+        # Something reached the result without passing through _serialize.
+        # Sweep it rather than lose the trace.
+        return json.dumps(_json_safe(result), allow_nan=False)
+
+
 def _serialize(v, _depth=0):
+    if isinstance(v, float) and not math.isfinite(v):
+        # float('inf') is ordinary in LeetCode solutions — it is how you
+        # initialise a running min/max, and how isValidBST seeds its bounds.
+        return _float_repr(v)
+
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
 
@@ -754,7 +794,7 @@ def _from_list_node(node):
         if id(cur) in seen:
             break
         seen.add(id(cur))
-        values.append(cur.val)
+        values.append(_serialize(cur.val))
         cur = cur.next
     return values
 
@@ -773,7 +813,7 @@ def _from_tree_node(root):
         if node is None:
             out.append(None)
             continue
-        out.append(node.val)
+        out.append(_serialize(node.val))
         queue.append(getattr(node, 'left', None))
         queue.append(getattr(node, 'right', None))
     while out and out[-1] is None:
@@ -1065,7 +1105,7 @@ def run_traced(code_string, examples=None):
     try:
         compiled = compile(code_string, USER_FILENAME, 'exec')
     except SyntaxError as exc:
-        return json.dumps({
+        return _dump({
             'snapshots': [],
             'truncated': False,
             'limit': None,
@@ -1138,4 +1178,4 @@ def run_traced(code_string, examples=None):
         except Exception:
             result['returnValue'] = None
 
-    return json.dumps(result)
+    return _dump(result)
