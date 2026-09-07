@@ -11,6 +11,14 @@
 
 export type TraceEvent = 'line' | 'call' | 'return';
 
+/** One frame of the call stack at a given step. */
+export interface StackFrame {
+  frameId: string;
+  frameName: string;
+  /** Line currently executing in that frame. */
+  line: number;
+}
+
 /** One step of execution. */
 export interface Snapshot {
   step: number;
@@ -25,6 +33,13 @@ export interface Snapshot {
   variables: Record<string, VariableState>;
   dataStructures: DataStructureState[];
   highlights: Highlight[];
+  /**
+   * The user frames currently on the stack, outermost first, with the
+   * innermost last. Reconstructed from the call/return event stream — a
+   * snapshot only carries its own frame, so the ancestors can't be read off
+   * it directly. Module and class-body frames are excluded.
+   */
+  callStack: StackFrame[];
   /** print() output emitted on this step, when there was any. */
   stdout?: string;
 }

@@ -1,6 +1,6 @@
 # LeetTrace — Design Doc & Completion Plan
 
-**Status:** v1.4 · 2026-09-07 (M1–M4 landed; §2–§6, §8 and §10 reflect what shipped)
+**Status:** v1.5 · 2026-09-07 (M1–M5 landed; §2–§6, §8 and §10 reflect what shipped)
 **Goal:** Take LeetTrace from "arrays and hashmaps work" to a complete tracer/visualizer for **all common DSA structures and algorithm patterns** on LeetCode Python solutions.
 
 ---
@@ -92,13 +92,13 @@ LeetTrace v1.0 is done when, for any LeetCode problem solvable with a Python `So
 | HashMap / dict / Counter / defaultdict | ✅ (M2) dict *family* | ✅ | ✅ HashMapViz (added / changed / untouched) | **Done** (B17 fixed in M4) |
 | Set / frozenset | ✅ (M2) | `{__type: 'set', items, frozen}` | ✅ SetViz (chip cloud, add/remove diff) | **Done** (M4) |
 | Matrix / 2-D grid | ✅ (M2, B13 fixed) | ✅ | ✅ MatrixViz (grid, row/col cursors, crossing-cell highlight) | **Done** (M4) |
-| Linked list (`ListNode`) | ✅ | ✅ (+cycle flag) | LinkedListViz (node chain, `slow`/`fast`/`curr` node pointers, cycle indicator) | **New**; needs B2 input building |
-| Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped) | TreeViz (SVG top-down layout, current-node highlight, path trail) | **New**; needs B2 input building |
+| Linked list (`ListNode`) | ✅ | ✅ (+`nodeIds`, `has_cycle`, `cycleIndex`) | ✅ LinkedListViz (chain, node cursors, cycle indicator) | **Done** (M5) |
+| Binary tree (`TreeNode`) | ✅ | ✅ (depth-capped, per-node `id`) | ✅ TreeViz (SVG top-down, in-order x / depth y, node cursors) | **Done** (M5) |
 | Stack (list used LIFO) | ✅ (M2) AST usage: `append` + no-arg `pop()` | list + `kind: 'stack'` | ✅ StackViz (vertical, top first, push/pop callouts) | **Done** (M4) |
 | Queue / deque | ✅ (M2) | `{__type: 'deque', items}` | ✅ QueueViz (front/back labels, popleft/append callouts) | **Done** (M4) |
-| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); viz **new** |
+| Heap (list via `heapq`) | ✅ (M2) AST usage: first arg to a `heapq.*` call | list + `kind: 'heap'` | HeapViz (implicit tree or bar view, min at root) | Detected + routed (M2); reads as a list until HeapViz in **M8** |
 | Graph (adjacency dict/list) | dict of lists w/ node-like keys, or `defaultdict(list)` | dict | GraphViz (force/ring layout, visited coloring) | **New — stretch, ship last** |
-| Recursion / call stack | `call`/`return` events | frame list (name, line, args) | CallStackViz (frame stack; powers DFS/backtracking) | **New** |
+| Recursion / call stack | `call`/`return` events | `Snapshot.callStack` (name, line, frameId) | ✅ CallStackViz (pinned when depth > 1) | **Done** (M5) |
 
 **Structure identity across steps:** visualizers diff against the previous snapshot by `id` (variable name). Keep that, but add `kind` disambiguation so a variable that changes type mid-trace re-mounts cleanly.
 
@@ -132,6 +132,10 @@ interface Snapshot {
   frameId: string;                 // stable per invocation, for call-stack viz + per-frame `changed`
   frameName: string;               // e.g. "twoSum"
   callDepth: number;
+  // The user frames on the stack, outermost first. Reconstructed from the
+  // call/return event stream by processSnapshots — a snapshot carries only its
+  // own frame, so the ancestors can't be read off it.
+  callStack: StackFrame[];
   variables: Record<string, VariableState>;
   dataStructures: DataStructureState[];
   highlights: Highlight[];
@@ -154,7 +158,8 @@ type StructureKind =
 // with `cell` marking which axis it moves along (-1 on the other), and a
 // `current` highlight on the flattened crossing cell.
 interface Pointer { name: string; index: number; cell?: { row: number; col: number }; color: string }
-interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order)
+interface NodePointer { name: string; nodeIndex: number; color: string } // linked list / tree (index into serialized node order — pre-order for trees)
+interface StackFrame { frameId: string; frameName: string; line: number }
 ```
 
 Messages get versioned in one union in `shared/types.ts`, all four contexts import it, and `examples`/`UPDATE_GUTTER` shapes are corrected (B12).

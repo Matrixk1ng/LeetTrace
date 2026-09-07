@@ -10,6 +10,7 @@ import type {
   Highlight,
   NodePointer,
   Snapshot,
+  StackFrame,
   StructureKind,
   TraceEvent,
   VariableState,
@@ -304,6 +305,49 @@ function collapseNodeAliases(dataStructures: DataStructureState[], context: Trac
 
 // ---------------------------------------------------------------------------
 
+/** The module frame isn't a call the user made — it's just where code lives. */
+const MODULE_FRAME = '<module>';
+
+/**
+ * Maps a whole trace, threading the call stack through it.
+ *
+ * A snapshot carries only its own frame, so the enclosing frames have to be
+ * recovered by replaying the call/return events in order — which is also the
+ * only place that information exists.
+ */
+export function processSnapshots(raws: RawSnapshot[], context: TraceContext): Snapshot[] {
+  const stack: StackFrame[] = [];
+
+  return raws.map((raw) => {
+    const tracked = raw.frameName !== MODULE_FRAME;
+
+    if (tracked) {
+      if (raw.event === 'call') {
+        stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line });
+      } else {
+        // Resync rather than assume: a budget can cut a trace mid-unwind, so
+        // the frame this step belongs to may sit below the recorded top.
+        const depth = stack.findIndex((frame) => frame.frameId === raw.frameId);
+        if (depth === -1) {
+          stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line });
+        } else {
+          stack.length = depth + 1;
+          stack[depth] = { ...stack[depth], line: raw.line };
+        }
+      }
+    }
+
+    const snapshot = processSnapshot(raw, context);
+    snapshot.callStack = stack.map((frame) => ({ ...frame }));
+
+    if (tracked && raw.event === 'return') {
+      stack.pop();
+    }
+
+    return snapshot;
+  });
+}
+
 export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapshot {
   const dataStructures: DataStructureState[] = [];
   const highlights: Highlight[] = [];
@@ -329,6 +373,9 @@ export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapsh
     variables: raw.variables,
     dataStructures: sorted,
     highlights,
+    // Filled in by processSnapshots, which is the only caller that can see
+    // the surrounding events.
+    callStack: [],
     ...(raw.stdout ? { stdout: raw.stdout } : {}),
   };
 }
