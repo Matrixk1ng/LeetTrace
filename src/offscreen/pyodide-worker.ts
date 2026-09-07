@@ -88,8 +88,17 @@ function execute(code: string, examples: string[]): TraceResult | ExecutionError
   let raw: RawTraceResult;
   try {
     raw = JSON.parse(rawJson) as RawTraceResult;
-  } catch {
-    return { error: 'Failed to parse execution output' };
+  } catch (err) {
+    // Say *why* and *where*. The bare message this used to return made a
+    // tracer bug (bare `Infinity`, which JSON.parse rejects) look like a
+    // mystery, with the whole trace already discarded.
+    const reason = err instanceof Error ? err.message : String(err);
+    const at = Number(/position (\d+)/.exec(reason)?.[1] ?? NaN);
+    const snippet = Number.isFinite(at)
+      ? rawJson.slice(Math.max(0, at - 60), at + 60)
+      : rawJson.slice(0, 120);
+    console.error('[LeetTrace][worker] unparseable tracer output:', reason, snippet);
+    return { error: `Could not read the trace output: ${reason}` };
   }
 
   if (raw.error) {

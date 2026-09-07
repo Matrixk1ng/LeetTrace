@@ -6,11 +6,17 @@
 import type { Highlight } from '../../../shared/types';
 import { HIGHLIGHT_COLORS } from '../../../shared/constants';
 
+/**
+ * JSON has no infinity, so the tracer sends these as Python's own spelling.
+ * Rendering them quoted would read as the string "inf" rather than the float.
+ */
+const NON_FINITE = new Set(['inf', '-inf', 'nan']);
+
 export function formatValue(value: unknown): string {
   if (value === null || value === undefined) return 'None';
   if (value === true) return 'True';
   if (value === false) return 'False';
-  if (typeof value === 'string') return `"${value}"`;
+  if (typeof value === 'string') return NON_FINITE.has(value) ? value : `"${value}"`;
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
