@@ -154,3 +154,28 @@ describe('processSnapshot', () => {
     expect(processSnapshot({ ...raw, stdout: 'hi\n' }, createTraceContext()).stdout).toBe('hi\n');
   });
 });
+
+describe('strings as character arrays (M4)', () => {
+  const indexed = createTraceContext({ s: { row: ['left', 'right'], col: [] } });
+
+  it('routes an indexed string to a character array', () => {
+    const ds = buildDataStructure('s', variable({ value: 'racecar', type: 'str' }), indexed);
+    expect(ds?.type).toBe('string');
+    expect(ds?.data).toEqual(['r', 'a', 'c', 'e', 'c', 'a', 'r']);
+  });
+
+  it('leaves a string nobody indexes as a plain variable', () => {
+    // Otherwise every message and label in the solution becomes a card.
+    expect(buildDataStructure('label', variable({ value: 'hello', type: 'str' }), indexed)).toBeNull();
+    expect(buildDataStructure('s', variable({ value: 'racecar', type: 'str' }))).toBeNull();
+  });
+
+  it('leaves an empty string alone', () => {
+    expect(buildDataStructure('s', variable({ value: '', type: 'str' }), indexed)).toBeNull();
+  });
+
+  it('does not explode a very long string into cells', () => {
+    const long = 'x'.repeat(5000);
+    expect(buildDataStructure('s', variable({ value: long, type: 'str' }), indexed)).toBeNull();
+  });
+});

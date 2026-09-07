@@ -14,6 +14,13 @@ export interface TraceState {
   status: ExecutionStatus;
   snapshots: Snapshot[];
   currentStep: number;
+  /**
+   * The step navigated away from, which is not always `currentStep - 1`
+   * (bug B17). Visualizers diff against this so stepping *backwards* shows
+   * what actually changed instead of re-reporting the step ahead as new.
+   * Null before the first move.
+   */
+  previousStep: number | null;
   totalSteps: number;
   speed: number; // ms per step
   error: string | null;
@@ -84,6 +91,7 @@ export const initialState: TraceState = {
   status: 'idle',
   snapshots: [],
   currentStep: 0,
+  previousStep: null,
   totalSteps: 0,
   speed: DEFAULT_SPEED,
   error: null,
@@ -107,6 +115,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
         snapshots,
         totalSteps: snapshots.length,
         currentStep: 0,
+        previousStep: null,
         status: snapshots.length > 0 ? 'paused' : 'completed',
         error: null,
         errorLine: null,
@@ -124,6 +133,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         currentStep: step,
+        previousStep: step === state.currentStep ? state.previousStep : state.currentStep,
       };
     }
 
@@ -133,6 +143,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         currentStep: nextStep,
+        previousStep: nextStep === state.currentStep ? state.previousStep : state.currentStep,
       };
     }
 
@@ -141,6 +152,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         currentStep: prevStep,
+        previousStep: prevStep === state.currentStep ? state.previousStep : state.currentStep,
       };
     }
 
@@ -175,6 +187,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       return {
         ...state,
         currentStep: 0,
+        previousStep: null,
         status: state.totalSteps > 0 ? 'paused' : 'idle',
       };
     }

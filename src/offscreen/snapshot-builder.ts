@@ -79,7 +79,15 @@ const LIST_LIKE_TYPES = new Set(['list', 'tuple']);
 const USAGE_KINDS = new Set<StructureKind>(['heap', 'stack']);
 
 /** Kinds whose `data` is a flat sequence an index pointer can address. */
-const SEQUENCE_KINDS = new Set<StructureKind>(['array', 'stack', 'heap']);
+const SEQUENCE_KINDS = new Set<StructureKind>(['array', 'string', 'stack', 'heap']);
+
+/**
+ * Strings are only worth their own card when the code walks them like a
+ * sequence — a palindrome check reads much better as a row of characters with
+ * two cursors on it. A string nobody indexes stays an ordinary variable
+ * instead of turning every message and label into a card.
+ */
+const MAX_STRING_CELLS = 200;
 
 function taggedType(value: unknown): string | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -301,7 +309,7 @@ export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapsh
   const highlights: Highlight[] = [];
 
   for (const [name, variable] of Object.entries(raw.variables)) {
-    const ds = buildDataStructure(name, variable);
+    const ds = buildDataStructure(name, variable, context);
     if (ds) dataStructures.push(ds);
   }
 
@@ -333,6 +341,7 @@ function group(dataStructures: DataStructureState[], context: TraceContext): Dat
 export function buildDataStructure(
   name: string,
   variable: VariableState,
+  context?: TraceContext,
 ): DataStructureState | null {
   const { value, type, kind } = variable;
 
@@ -367,6 +376,17 @@ export function buildDataStructure(
 
   if (DICT_LIKE_TYPES.has(type) && value !== null && typeof value === 'object') {
     return { id: name, type: 'hashmap', data: value, pointers: [] };
+  }
+
+  // 4. Strings, as character arrays — but only the ones the code indexes.
+  if (
+    type === 'str' &&
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_STRING_CELLS &&
+    context?.indexing[name]
+  ) {
+    return { id: name, type: 'string', data: Array.from(value), pointers: [] };
   }
 
   return null;

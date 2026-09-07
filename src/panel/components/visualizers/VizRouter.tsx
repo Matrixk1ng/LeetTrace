@@ -1,46 +1,47 @@
-import type { DataStructureState, StructureKind } from '../../../shared/types';
+import type { DataStructureState, Highlight } from '../../../shared/types';
 import { useTrace } from '../../store/useTrace';
 import ArrayViz from './ArrayViz';
 import HashMapViz from './HashMapViz';
-
-function findPrevious(
-  snapshots: ReturnType<typeof useTrace>['state']['snapshots'],
-  currentStep: number,
-  id: string,
-): DataStructureState | null {
-  if (currentStep <= 0) return null;
-  const prev = snapshots[currentStep - 1];
-  if (!prev) return null;
-  return prev.dataStructures.find((ds) => ds.id === id) ?? null;
-}
+import MatrixViz from './MatrixViz';
+import QueueViz from './QueueViz';
+import SetViz from './SetViz';
+import StackViz from './StackViz';
 
 /**
- * Kinds whose payload is a sequence, so ArrayViz can render them meaningfully
- * until their dedicated visualizers land (M4/M5). Without this, tagging a list
- * as a stack or a heap in M2 would push structures that render fine today into
- * the raw JSON fallback.
+ * Human labels for the card headers — `linked_list` shouldn't be what the user
+ * reads.
  */
-const SEQUENCE_KINDS = new Set<StructureKind>(['array', 'stack', 'heap', 'queue', 'set']);
-
-/** deque and set serialize as `{__type, items}`; arrays are already flat. */
-function sequenceData(ds: DataStructureState): unknown[] | null {
-  if (Array.isArray(ds.data)) return ds.data;
-  const items = (ds.data as { items?: unknown })?.items;
-  return Array.isArray(items) ? items : null;
-}
+const KIND_LABELS: Record<DataStructureState['type'], string> = {
+  array: 'array',
+  string: 'string',
+  matrix: 'matrix',
+  hashmap: 'hash map',
+  set: 'set',
+  linked_list: 'linked list',
+  tree: 'tree',
+  stack: 'stack',
+  queue: 'queue',
+  heap: 'heap',
+  graph: 'graph',
+};
 
 export default function VizRouter() {
-  const { currentSnapshot, state } = useTrace();
+  const { currentSnapshot, previousSnapshot } = useTrace();
 
   if (!currentSnapshot) return null;
   const { dataStructures, highlights } = currentSnapshot;
   if (dataStructures.length === 0) return null;
 
+  // Diffing against the step we came *from* is what makes stepping backwards
+  // report what actually changed (bug B17).
+  const previousById = new Map(
+    (previousSnapshot?.dataStructures ?? []).map((ds) => [ds.id, ds] as const),
+  );
+
   return (
     <div className="flex flex-col gap-3">
       {dataStructures.map((ds) => {
-        const previous = findPrevious(state.snapshots, state.currentStep, ds.id);
-        const sequence = SEQUENCE_KINDS.has(ds.type) ? sequenceData(ds) : null;
+        const previous = previousById.get(ds.id) ?? null;
 
         return (
           <section
@@ -49,23 +50,55 @@ export default function VizRouter() {
             style={{ padding: 14 }}
           >
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-trace-text-muted">
-              {ds.id} — {ds.type}
+              {ds.id} — {KIND_LABELS[ds.type] ?? ds.type}
             </div>
-            {sequence !== null ? (
-              <ArrayViz
-                dataStructure={sequence === ds.data ? ds : { ...ds, data: sequence }}
-                highlights={highlights}
-              />
-            ) : ds.type === 'hashmap' ? (
-              <HashMapViz dataStructure={ds} previousDataStructure={previous} />
-            ) : (
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-trace-text-secondary">
-                {JSON.stringify(ds.data, null, 2)}
-              </pre>
-            )}
+            <Viz dataStructure={ds} previous={previous} highlights={highlights} />
           </section>
         );
       })}
     </div>
   );
+}
+
+function Viz({
+  dataStructure,
+  previous,
+  highlights,
+}: {
+  dataStructure: DataStructureState;
+  previous: DataStructureState | null;
+  highlights: Highlight[];
+}) {
+  switch (dataStructure.type) {
+    // `string` renders as its characters — the builder only routes one here
+    // when the code actually indexes it, so a bare `word` stays a variable.
+    // `heap` is a list and reads fine as one until HeapViz lands in M8.
+    case 'array':
+    case 'string':
+    case 'heap':
+      return <ArrayViz dataStructure={dataStructure} highlights={highlights} />;
+
+    case 'matrix':
+      return <MatrixViz dataStructure={dataStructure} highlights={highlights} />;
+
+    case 'hashmap':
+      return <HashMapViz dataStructure={dataStructure} previousDataStructure={previous} />;
+
+    case 'stack':
+      return <StackViz dataStructure={dataStructure} previousDataStructure={previous} />;
+
+    case 'queue':
+      return <QueueViz dataStructure={dataStructure} previousDataStructure={previous} />;
+
+    case 'set':
+      return <SetViz dataStructure={dataStructure} previousDataStructure={previous} />;
+
+    default:
+      // linked_list and tree land here until M5; graph is the M8 stretch goal.
+      return (
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-trace-text-secondary">
+          {JSON.stringify(dataStructure.data, null, 2)}
+        </pre>
+      );
+  }
 }
