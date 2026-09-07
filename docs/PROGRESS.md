@@ -39,6 +39,24 @@
 
 ## 3. Session notes
 
+### 2026-09-07 — Tally feedback and monetization planning
+
+- Replaced the GitHub feedback chooser with a direct link to the owner's
+  Tally form, https://tally.so/r/2EWO8D. The pinned footer remains available;
+  no code, testcase values, or version metadata are appended.
+- Verified the published URL returns HTTP 200 without submitting a response.
+  Owner still needs to enable Tally self email notifications and test delivery.
+- Added MONETIZATION.md: free-core commitments, proposed cloud-study/step-explanation
+  bundle, $4/month and $30/year pricing hypotheses, client/server boundaries,
+  cost checks, fair cancellation/upgrade behavior, and a staged tracking checklist.
+  No payment/account functionality or paywalls were added.
+- Updated README/DESIGN and the existing footer regression test for Tally.
+- Verification: lint, all 116 TypeScript tests, production build, and git diff
+  whitespace checks passed. Python code was unchanged in this update.
+- Next: owner feedback email check; continue live LeetCode checks. Validate paid
+  feature demand and costs before implementing the proposed paid tier.
+
+
 ### 2026-09-07 — Selected/custom testcases and feedback
 
 - Read visible named testcase fields, including textareas, inputs, contenteditable/

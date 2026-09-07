@@ -6,16 +6,14 @@ import { TraceProvider } from '../../src/panel/store/TraceContext';
 import type { ExecutionResponse, Message } from '../../src/shared/types';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-it('opens user-reviewed bug and feature forms without attaching code or inputs', () => {
-  vi.stubGlobal('chrome', {runtime: {getManifest: () => ({version:'0.1.0'})}});
+it('links directly to the supplied feedback form without attaching trace data', () => {
   render(<FeedbackFooter />);
-  fireEvent.click(screen.getByRole('button',{name:'Feature request / Report a bug'}));
-  const bug = new URL(screen.getByRole('link',{name:/Report a bug/}).getAttribute('href')!);
-  expect(bug.origin + bug.pathname).toBe('https://github.com/Matrixk1ng/LeetTrace/issues/new');
-  expect(bug.searchParams.get('title')).toBe('[Bug] ');
-  expect(bug.searchParams.get('body')).toContain('LeetTrace version: 0.1.0');
-  expect(screen.getByText(/Reports are public/)).toBeTruthy();
-  expect(new URL(screen.getByRole('link',{name:/Request a feature/}).getAttribute('href')!).searchParams.get('title')).toBe('[Feature request] ');
+  const link = screen.getByRole('link', {name: 'Feature request / Report a bug'});
+  expect(link.getAttribute('href')).toBe('https://tally.so/r/2EWO8D');
+  expect(link.getAttribute('target')).toBe('_blank');
+  expect(link.getAttribute('rel')).toContain('noopener');
+  expect(screen.getByText(/inputs are not attached automatically/)).toBeTruthy();
+  expect(screen.queryByText(/GitHub/)).toBeNull();
 });
 
 it('retraces the latest custom testcase after an in-flight run without showing the superseded result', async () => {

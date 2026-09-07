@@ -41,21 +41,21 @@ selector compatibility still needs checking after page layout changes.
 
 ## Receiving bug reports and feature requests
 
-The pinned **Feature request / Report a bug** button opens prefilled GitHub issue
-forms in [Matrixk1ng/LeetTrace](https://github.com/Matrixk1ng/LeetTrace/issues).
-The repository is public and Issues was verified enabled on 2026-09-07.
+The pinned **Feature request / Report a bug** link opens the
+[LeetTrace feedback form](https://tally.so/r/2EWO8D) in a new tab. Users submit
+through Tally; the extension does not attach code, testcase inputs, or account
+details. Feedback no longer depends on access to this repository.
 
-Users sign into GitHub, review the form, and submit it. You receive each report
-in the repository's **Issues** tab, where you can reply, label, and close it.
-To receive alerts, choose **Watch → Custom → Issues** on the repository, then
-enable email under [GitHub notification settings](https://github.com/settings/notifications).
-See [GitHub's notification guide](https://docs.github.com/en/subscriptions-and-notifications/get-started/configuring-notifications).
+View submissions in your Tally dashboard. In the form settings, enable
+**Email notifications → Self email notifications** to receive new responses at
+your Tally account email. Owner notifications are free:
+[Tally setup guide](https://tally.so/help/self-email-notifications).
+The published link was verified reachable; email delivery still needs an owner
+test submission. No response was submitted during implementation.
 
-No extension backend, email credentials, API token, or extra Chrome permission
-is needed: GitHub stores submissions. Reports are public, and the forms include
-only the extension version automatically; code and testcase inputs are not
-attached. A private or account-free feedback flow would require changing the
-destination to a hosted form or a feedback backend.
+See [the monetization plan](docs/MONETIZATION.md) for the proposed free/paid
+feature split, affordable pricing hypotheses, operating costs, and launch checklist.
+There is no paid tier or billing implementation yet.
 
 ## How to read a trace
 

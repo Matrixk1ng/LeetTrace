@@ -239,9 +239,10 @@ after the user has traced once; an in-flight run finishes but its superseded res
 is discarded. Unreadable selected inputs fail explicitly. The panel displays the
 traced case and its exact input. Chrome/LeetCode live integration still needs testing.
 
-A pinned footer opens public GitHub issue forms for bugs/features. Users review
-and submit on GitHub; only extension version is prefilled automatically. No backend
-or credentials are embedded. This extends custom input support on the LeetCode
+A pinned footer opens the owner's Tally feedback form in a new tab. Users choose
+what to submit; the extension attaches no trace/code data. Feedback works with a
+private source repository. No feedback backend or credentials are embedded.
+See MONETIZATION.md for optional paid-feature proposals and tracking. This extends custom input support on the LeetCode
 page; a custom-input editor inside the panel remains outside v1 scope.
 
 ## 8. UI/UX implementation
