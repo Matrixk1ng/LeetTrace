@@ -1,4 +1,7 @@
 import HeapViz from './HeapViz';
+import TupleSequenceViz from './TupleSequenceViz';
+import GridFocusViz from './GridFocusViz';
+import { gridSearchStructures } from './gridSearch';
 import type { DataStructureState, Highlight } from '../../../shared/types';
 import { useTrace } from '../../store/useTrace';
 import ArrayViz from './ArrayViz';
@@ -29,10 +32,11 @@ const KIND_LABELS: Record<DataStructureState['type'], string> = {
 };
 
 export default function VizRouter() {
-  const { currentSnapshot, previousSnapshot } = useTrace();
+  const { currentSnapshot, previousSnapshot, dispatch, state } = useTrace();
 
   if (!currentSnapshot) return null;
   const { dataStructures, highlights } = currentSnapshot;
+  const combined = gridSearchStructures(currentSnapshot, state.detectedPattern?.type);
   if (dataStructures.length === 0) return null;
 
   // Diffing against the step we came *from* is what makes stepping backwards
@@ -43,7 +47,7 @@ export default function VizRouter() {
 
   return (
     <div className="flex flex-col gap-3">
-      {dataStructures.map((ds) => {
+      {dataStructures.filter(ds => ds !== combined?.grid && ds !== combined?.queue).map((ds) => {
         const candidate = previousById.get(ds.id);
         const previous = candidate?.type === ds.type ? candidate : null;
 
@@ -55,9 +59,10 @@ export default function VizRouter() {
             style={{ padding: 14 }}
           >
             <summary className="mb-2 cursor-pointer text-sm font-semibold text-trace-text-secondary">
-              {ds.id} — {KIND_LABELS[ds.type] ?? ds.type}
+              {ds.displayName ?? ds.id} — {ds.tupleItems ? 'tuple sequence' : KIND_LABELS[ds.type] ?? ds.type}
             </summary>
-            <Viz dataStructure={ds} previous={previous} highlights={highlights} />
+            {ds.treeContext && <p className="mb-2 text-xs text-trace-text-muted">Tree from {ds.treeContext} · kept visible during child calls</p>}
+            <Viz onSelectStep={step => { dispatch({type: 'PAUSE'}); dispatch({type: 'SET_STEP', payload: step}); }} dataStructure={ds} previous={previous} highlights={highlights} />
           </details>
         );
       })}
@@ -69,11 +74,15 @@ function Viz({
   dataStructure,
   previous,
   highlights,
+  onSelectStep,
 }: {
   dataStructure: DataStructureState;
   previous: DataStructureState | null;
   highlights: Highlight[];
+  onSelectStep: (step: number) => void;
 }) {
+  const { currentSnapshot } = useTrace();
+  if (dataStructure.tupleItems) return <TupleSequenceViz dataStructure={dataStructure}/>;
   switch (dataStructure.type) {
     // `string` renders as its characters — the builder only routes one here
     // when the code actually indexes it, so a bare `word` stays a variable.
@@ -85,6 +94,7 @@ function Viz({
       return <HeapViz dataStructure={dataStructure} />;
 
     case 'matrix':
+      if (currentSnapshot?.visual) return <GridFocusViz dataStructure={dataStructure} snapshot={currentSnapshot}/>;
       return <MatrixViz dataStructure={dataStructure} highlights={highlights} />;
 
     case 'hashmap':
@@ -103,7 +113,7 @@ function Viz({
       return <LinkedListViz dataStructure={dataStructure} />;
 
     case 'tree':
-      return <TreeViz dataStructure={dataStructure} previousDataStructure={previous} />;
+      return <TreeViz onSelectStep={onSelectStep} dataStructure={dataStructure} previousDataStructure={previous} />;
 
     default:
       // Only `graph` reaches here now — the M8 stretch goal.

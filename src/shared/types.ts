@@ -11,8 +11,19 @@
 
 export type TraceEvent = 'line' | 'call' | 'return';
 
+/** Syntactic references on this statement, not proof an operand was evaluated. */
+export interface VisualReferences {
+  offsets?: { target: string; base: string }[];
+  queueOperation?: { kind: 'append' | 'popleft'; queue: string; targets?: [string, string] };
+  levelLoop?: { line: number; queue: string } | null;
+  names: string[];
+  cells: { structure: string; indices: [string | number, string | number]; write: boolean }[];
+}
+
 /** One frame of the call stack at a given step. */
 export interface StackFrame {
+  /** Unambiguous tree argument for a recursive call, including empty children. */
+  treeNode?: { name: string; nodeId: string | null; value: unknown };
   frameId: string;
   frameName: string;
   /** Line currently executing in that frame. */
@@ -21,6 +32,8 @@ export interface StackFrame {
 
 /** One step of execution. */
 export interface Snapshot {
+  gridSearch?: GridSearchState;
+  visual?: VisualReferences;
   step: number;
   /** 1-indexed, always within the user's own code. */
   line: number;
@@ -44,7 +57,20 @@ export interface Snapshot {
   stdout?: string;
 }
 
+export interface GridSearchState {
+  grid: string;
+  queue: string;
+  current?: [number, number];
+  /** Queue prefix still waiting in the captured range(len(q)) iteration. */
+  frontier?: { remaining: number; pass: number };
+  effects: { kind: 'enqueue' | 'dequeue' | 'write'; line: number; value?: unknown; cell?: [number, number]; before?: unknown; after?: unknown }[];
+  /** An observed change or the start of a distinct grid-reference statement. */
+  event: boolean;
+}
+
 export interface VariableState {
+  /** Preserve list-of-tuples identity while keeping its existing JSON value. */
+  tupleItems?: boolean;
   value: unknown;
   /** Python type name: "int", "list", "dict", "TreeNode", "ListNode", … */
   type: string;
@@ -71,7 +97,30 @@ export type StructureKind =
   | 'heap'
   | 'graph';
 
+export interface TreeTraversalEvent {
+  kind: 'enter' | 'return' | 'empty';
+  nodeId: string | null;
+  parentId: string | null;
+  value: unknown;
+  step: number;
+  frameName: string;
+}
+export interface TreeTraversal {
+  currentNodeId: string | null;
+  path: string[];
+  entered: { nodeId: string; value: unknown; step: number }[];
+  returnedNodeIds: string[];
+  /** Last 40 call/return events, bounded independently of playback. */
+  events: TreeTraversalEvent[];
+  action?: TreeTraversalEvent;
+}
+
 export interface DataStructureState {
+  tupleItems?: boolean;
+  displayName?: string;
+  /** Function owning the enclosing tree when the current frame holds a subtree. */
+  treeContext?: string;
+  traversal?: TreeTraversal;
   /** Variable name. */
   id: string;
   type: StructureKind;

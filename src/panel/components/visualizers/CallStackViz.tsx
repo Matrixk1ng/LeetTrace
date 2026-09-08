@@ -1,5 +1,5 @@
 import type { StackFrame } from '../../../shared/types';
-import { IDLE_BG, IDLE_BORDER } from './format';
+import { IDLE_BG, IDLE_BORDER, formatValue, truncate } from './format';
 
 interface CallStackVizProps {
   frames: StackFrame[];
@@ -54,7 +54,7 @@ export default function CallStackViz({ frames }: CallStackVizProps) {
               }}
               title={`${frame.frameName}() — line ${frame.line}`}
             >
-              <span className="text-trace-text-primary">{frame.frameName}()</span>
+              <span className="text-trace-text-primary">{frame.frameName}({frame.treeNode ? frame.treeNode.name + ' = ' + (frame.treeNode.nodeId === null ? 'None' : truncate(formatValue(frame.treeNode.value), 14)) : ''}){isCurrent && <span className="ml-2 text-trace-accent">← current</span>}</span>
               <span className="text-trace-text-muted" style={{ fontSize: 10 }}>
                 line {frame.line}
               </span>

@@ -312,3 +312,22 @@ Suggested issue mapping: one GitHub issue per milestone bullet-group, labeled `P
 - Editing/re-running with custom inputs from the panel (v1.1 candidate — the plumbing exists once B2's converters land).
 - Persisting traces across page reloads.
 - LeetCode contests / interlocked problems (`/contest/*` URLs not matched).
+
+### Tree recursion playback
+
+Tree snapshots retain the enclosing call's tree and patch child snapshots into it
+by node identity. Recorded recursive tree arguments label stack frames; empty
+children remain None rather than appearing as extra nodes. The tree card appears
+first while this traversal context exists.
+
+Orange identifies the current call's node, cyan the active call path, green nodes
+whose calls have returned, and violet previously entered nodes. Call arrows point
+down an actual parent-child edge; dashed return arrows point back to the caller.
+Colors have a visible legend and node tooltips. The first-entry chips jump to the
+recorded call and pause playback. Recent history lists the last eight events from
+a bounded forty-event buffer.
+
+Entry order is not output order, and returning does not imply that every
+descendant was explored. Histories are built in execution order, so scrubbing
+backwards never shows future entries. Traversal inference abstains for ambiguous
+multiple-tree parameters; ordinary node-variable labels remain available.

@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { createTraceContext, processSnapshots, type RawSnapshot, type RawTraceResult } from '../../src/offscreen/snapshot-builder';
 import App from '../../src/panel/App';
 import { TraceContext } from '../../src/panel/store/useTrace';
 import { initialState } from '../../src/panel/store/traceReducer';
@@ -59,27 +61,41 @@ function Card({ title, note, children }: { title: string; note?: string; childre
 const bstRoot = {__type: 'tree', root: {id: 'a', val: 2,
   left: {id: 'b', val: 1, left: null, right: null},
   right: {id: 'c', val: 3, left: null, right: null}}};
-const bst: Snapshot = {
-  step: 37, line: 17, event: 'return', frameId: 'f1', frameName: 'isValidBST', callDepth: 1,
-  callStack: [], highlights: [],
-  variables: {
-    self: {type: 'Solution', value: '<Solution object at 0xc27900>', changed: false},
-    dfs: {type: 'function', value: '<function Solution.isValidBST.dfs>', changed: false},
-    root: {type: 'TreeNode', value: bstRoot, changed: false},
-    return: {type: 'bool', value: true, changed: true},
-  },
-  dataStructures: [{id: 'root', type: 'tree', data: bstRoot, pointers: []}],
-};
+const treeCalls: RawSnapshot[] = [
+  {step:0, line:2, event:'call', frameId:'outer', frameName:'isValidBST',callDepth:0,
+    variables:{root:{type:'TreeNode',value:bstRoot,changed:false}}},
+  ...(['call','call','return'] as const).map((event,i) => ({
+    step:i+1,line:5,event,frameId:i===0?'dfs-root':'dfs-left',frameName:'dfs',callDepth:i===0?1:2,
+    variables:{node:{type:'TreeNode',value:{__type:'tree',root:i===0?bstRoot.root:bstRoot.root.left},changed:true}},
+  })),
+  {step:4, line:6, event:'line',frameId:'dfs-root',frameName:'dfs',callDepth:1,
+    variables:{node:{type:'TreeNode',value:bstRoot,changed:false}}},
+];
+const treeSnapshots: Snapshot[] = processSnapshots(treeCalls, createTraceContext());
+// Exercise the real Python -> JSON -> snapshot enrichment -> React path.
+const gridRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c',
+  "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/grid-search-example.py').read_text(), ['grid = [[2,1,1],[1,1,0],[0,1,1]]']))"
+], {cwd:ROOT, encoding:'utf8'}));
+const gridSnapshots = processSnapshots(gridRaw.snapshots, createTraceContext(gridRaw.indexing));
+const gridStep = gridSnapshots.findIndex(s => s.visual?.cells.some(c => c.structure === 'grid') &&
+  s.variables.nr?.value === 0 && s.variables.nc?.value === 1 && s.gridSearch?.current);
 function Gallery() {
   return (
     <div style={{ width: 400 }}>
+      <div className="panel-preview"><TraceContext.Provider value={{state:{...initialState,status:'paused',
+        testCase:{label:'Case 1',input:'grid = [[2,1,1],[1,1,0],[0,1,1]]'},snapshots:gridSnapshots,currentStep:Math.max(0,gridStep),totalSteps:gridSnapshots.length,returnValue:gridRaw.returnValue,
+        detectedPattern:{type:'bfs',confidence:.8,description:'Queue-based search.'}},dispatch:()=>{}}}><App/></TraceContext.Provider></div>
       <div className="panel-preview"><TraceContext.Provider value={{state: {...initialState, status: 'paused',
         testCase: {label: 'Case 1', input: 'root = [2,1,3]'},
-        snapshots: Array.from({length: 38}, () => bst), currentStep: 37, totalSteps: 38, returnValue: true,
+        snapshots: treeSnapshots, currentStep: 3, totalSteps: treeSnapshots.length,
         detectedPattern: {type: 'dfs', confidence: .66, description: 'Explores subproblems through recursive calls.'}},
         dispatch: () => {}}}>
         <App />
       </TraceContext.Provider></div>
+      <Card title="DFS — returning to the parent">
+        <TreeViz dataStructure={treeSnapshots[3].dataStructures[0]} onSelectStep={() => {}} />
+        <CallStackViz frames={treeSnapshots[3].callStack} />
+      </Card>
       <Card title="nums — array" note="two cursors, stable colours">
         <ArrayViz dataStructure={mock.mockArray} highlights={[]} />
       </Card>
@@ -213,4 +229,8 @@ ${renderToStaticMarkup(<Gallery />)}
   writeFileSync(join(HERE, 'gallery.html'), html, 'utf8');
 
   expect(html).toContain('visualizer gallery');
+  expect(gridRaw.error).toBeNull();
+  expect(gridStep).toBeGreaterThan(0);
+  expect(gridSnapshots[gridStep].gridSearch?.frontier).toBeDefined();
+  expect(gridSnapshots.some(s => s.gridSearch?.effects.some(e => e.kind === 'enqueue'))).toBe(true);
 });

@@ -25,6 +25,7 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
 """
 
 import ast
+import builtins
 import collections
 import json
 import math
@@ -308,6 +309,84 @@ def _display_locals(frame):
     return items
 
 
+_visual_lines = {}
+
+
+def _analyze_visual_lines(tree):
+    """Statement-local references, never descendants in a loop/branch body.
+
+    Coordinates are only names/literals: no expression evaluation or extra calls.
+    A referenced condition operand is not asserted to have executed/passed.
+    """
+    result = {}
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.stmt) or isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        roots = [value for _, value in ast.iter_fields(stmt) if isinstance(value, ast.expr)]
+        for _, value in ast.iter_fields(stmt):
+            if isinstance(value, list):
+                roots.extend(x for x in value if isinstance(x, ast.expr))
+        nodes = [n for root in roots for n in ast.walk(root)]
+        cells = []
+        for n in nodes:
+            if not (isinstance(n, ast.Subscript) and isinstance(n.value, ast.Subscript)
+                    and isinstance(n.value.value, ast.Name)):
+                continue
+            indices = [n.value.slice, n.slice]
+            if not all(isinstance(x, ast.Name) or isinstance(x, ast.Constant) and type(x.value) is int for x in indices):
+                continue
+            cells.append({'structure': n.value.value.id,
+                          'indices': [x.id if isinstance(x, ast.Name) else x.value for x in indices],
+                          'write': isinstance(n.ctx, ast.Store)})
+        info = {'names': sorted({n.id for n in nodes if isinstance(n, ast.Name)}),
+                'cells': cells}
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+            pairs = list(zip(target.elts, value.elts)) if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)) and len(target.elts) == len(value.elts) else [(target, value)]
+            offsets = []
+            for dest, expr in pairs:
+                if isinstance(dest, ast.Name) and isinstance(expr, ast.BinOp) and isinstance(expr.op, (ast.Add, ast.Sub)) and isinstance(expr.left, ast.Name) and isinstance(expr.right, (ast.Name, ast.Constant)):
+                    offsets.append({'target': dest.id, 'base': expr.left.id})
+            if offsets:
+                info['offsets'] = offsets
+        call = stmt.value if isinstance(stmt, (ast.Expr, ast.Assign)) else None
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and not call.keywords:
+            method = call.func.attr
+            if method == 'append' and len(call.args) == 1 and isinstance(stmt, ast.Expr):
+                info['queueOperation'] = {'kind': 'append', 'queue': call.func.value.id}
+            elif method == 'popleft' and not call.args and isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target = stmt.targets[0]
+                if isinstance(target, (ast.Tuple, ast.List)) and len(target.elts) == 2 and all(isinstance(x, ast.Name) for x in target.elts):
+                    info['queueOperation'] = {'kind': 'popleft', 'queue': call.func.value.id,
+                                              'targets': [x.id for x in target.elts]}
+        # Multiple statements on one line cannot be distinguished by sys.settrace.
+        if stmt.lineno in result:
+            result[stmt.lineno] = {'names': [], 'cells': []}
+        else:
+            result[stmt.lineno] = info
+    # Only the explicit fixed-size queue loop supplies a frontier boundary.
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.For):
+            continue
+        it = stmt.iter
+        if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == 'range'
+                and len(it.args) == 1 and not it.keywords):
+            continue
+        length = it.args[0]
+        if not (isinstance(length, ast.Call) and isinstance(length.func, ast.Name) and length.func.id == 'len'
+                and len(length.args) == 1 and isinstance(length.args[0], ast.Name) and not length.keywords):
+            continue
+        end = max((getattr(x, 'end_lineno', x.lineno) for x in stmt.body), default=stmt.lineno)
+        for line, info in result.items():
+            if stmt.lineno <= line <= end:
+                # Nested level loops are ambiguous; their shared lines abstain.
+                if 'levelLoop' in info:
+                    info['levelLoop'] = None
+                else:
+                    info['levelLoop'] = {'line': stmt.lineno, 'queue': length.args[0].id}
+    return result
+
+
 def _collect_locals(frame, frame_id):
     previous = _prev_locals.get(frame_id, {})
     current = {}
@@ -321,6 +400,8 @@ def _collect_locals(frame, frame_id):
                 'changed': k not in previous or previous.get(k) != repr(v),
             }
             kind = _usage_kind(k, v)
+            if isinstance(v, list) and v and all(isinstance(x, tuple) for x in v):
+                entry['tupleItems'] = True
             if kind:
                 entry['kind'] = kind
             current[k] = entry
@@ -669,6 +750,11 @@ def _tracer(frame, event, arg):
         'callDepth': info['depth'],
         'variables': current_locals,
     }
+    snapshot['visual'] = _visual_lines.get(frame.f_lineno, {'names': [], 'cells': []}) if event == 'line' else {'names': [], 'cells': []}
+    if snapshot['visual'].get('levelLoop') and any(
+            frame.f_locals.get(name, frame.f_globals.get(name, builtin)) is not builtin
+            for name, builtin in [('range', builtins.range), ('len', builtins.len)]):
+        snapshot['visual'] = dict(snapshot['visual'], levelLoop=None)
 
     if _stdout is not None:
         emitted = _stdout.drain()
@@ -1273,7 +1359,7 @@ def _detect_pattern(tree):
 
 
 def run_traced(code_string, examples=None):
-    global _user_max_line, _usage
+    global _user_max_line, _usage, _visual_lines
 
     _user_max_line = code_string.count('\n') + 1
 
@@ -1300,6 +1386,7 @@ def run_traced(code_string, examples=None):
         tree = None
 
     _usage = _analyze_usage(tree) if tree is not None else {}
+    _visual_lines = _analyze_visual_lines(tree) if tree is not None else {}
     indexing = _analyze_indexing(tree) if tree is not None else {}
 
     namespace = _build_namespace()

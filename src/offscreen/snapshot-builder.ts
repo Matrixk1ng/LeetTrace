@@ -1,3 +1,5 @@
+import { enrichTreeSnapshots } from './tree-traversal';
+import { enrichGridSearch } from './grid-search';
 /**
  * Turns the tracer's raw Python output into the panel's Snapshot schema:
  * data structures, pointers and highlights are derived here in TypeScript
@@ -15,11 +17,13 @@ import type {
   StructureKind,
   TraceEvent,
   VariableState,
+  VisualReferences,
 } from '../shared/types';
 import { POINTER_COLORS } from '../shared/constants';
 
 /** One snapshot exactly as `tracer.py` emits it. */
 export interface RawSnapshot {
+  visual?: VisualReferences;
   step: number;
   line: number;
   event: TraceEvent;
@@ -321,7 +325,7 @@ const MODULE_FRAME = '<module>';
 export function processSnapshots(raws: RawSnapshot[], context: TraceContext): Snapshot[] {
   const stack: StackFrame[] = [];
 
-  return raws.map((raw) => {
+  const snapshots = raws.map((raw) => {
     const tracked = raw.frameName !== MODULE_FRAME;
 
     if (tracked) {
@@ -349,6 +353,7 @@ export function processSnapshots(raws: RawSnapshot[], context: TraceContext): Sn
 
     return snapshot;
   });
+  return enrichGridSearch(enrichTreeSnapshots(snapshots, context.colorOf), context.indexing);
 }
 
 export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapshot {
@@ -363,10 +368,13 @@ export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapsh
   const sorted = group(dataStructures, context);
 
   for (const ds of sorted) {
-    attachIndexPointers(ds, raw.variables, context, highlights);
+    // Statement metadata supersedes function-wide matrix cursor inference.
+    // Keep the legacy fallback for old saved traces without this metadata.
+    if (ds.type !== 'matrix' || !raw.visual) attachIndexPointers(ds, raw.variables, context, highlights);
   }
 
   return {
+    ...(raw.visual ? { visual: raw.visual } : {}),
     step: raw.step,
     line: raw.line,
     event: raw.event,
@@ -418,7 +426,8 @@ export function buildDataStructure(
   if (Array.isArray(value) && LIST_LIKE_TYPES.has(type)) {
     return {
       id: name,
-      type: isMatrix(value) ? 'matrix' : 'array',
+      type: !variable.tupleItems && isMatrix(value) ? 'matrix' : 'array',
+      ...(variable.tupleItems ? { tupleItems: true } : {}),
       data: value,
       pointers: [],
     };

@@ -32,12 +32,114 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 116 passed |
-| `npm run test:tracer` (pytest) | 119 passed |
+| `npm test` (vitest) | 141 passed |
+| `npm run test:tracer` (pytest) | 124 passed |
 | `npm run smoke:pyodide` | all pass |
 | `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### 2026-09-08 — Compact editor badges
+
+- Inline editor annotations now show only short scalar values (numbers, booleans,
+  None and strings up to 24 characters), capped at four and ranked by current
+  statement relevance. Arrays, grids, queues and node objects stay in the panel.
+- Badges wrap within the editor's existing half-width limit; individual labels
+  can wrap instead of clipping. Full values remain in the panel inspector.
+
+### 2026-09-07 — BFS semantic state and event navigation
+
+- Resumed after a usage-limit rejection of the screenshot tool; capture now
+  succeeds. Built on the approved grid foundation without moving to DFS.
+- Replays confirmed append/popleft and grid writes into immutable per-step
+  effects; records source line and values. No evaluation of user conditions.
+- Current coordinates require verified dequeue/unpacking plus matching grid
+  axes, directly or via an observed neighbor-offset assignment. Current/candidate
+  and next-frontier queued cells use cyan/amber/violet with text labels.
+- Splits current/next frontier only for explicit builtin `range(len(q))` loops.
+  Counts observed loop passes, not distance/minutes. Unexplained queue changes,
+  ambiguous structures or unsupported patterns fall back to a regular queue.
+- Previous/next event buttons pause and jump into the exact snapshot timeline.
+  Rewind restores prior effects/frontier without future entries. Exact playback,
+  testcase selection and controls remain available; BFS toolbar spacing reduced.
+- Tests: 141 Vitest, 124 pytest, lint/build, Pyodide smoke and gallery pass. The
+  gallery now runs the real Python BFS fixture through enrichment and React;
+  Python must be available for `npm run gallery`.
+- Captured actual 400px/550px panels under docs/previews/grid-implementation*.png.
+  Live Chrome/LeetCode remains a manual review: reload extension AND page, trace
+  a grid BFS, test event jumps/rewind and custom cases. Review this BFS slice
+  before the separate DFS refinement. Condition outcomes and animation polish
+  remain optional follow-ups; do not claim they were implemented.
+
+### 2026-09-07 — Approved refinement: grid/BFS foundation slice
+
+- User approved the visual direction. Implemented the first bounded portion:
+  combined grid/queue view for unambiguous BFS snapshots, larger selectable cells,
+  reduced nested padding, wrapped tuple records/queue items and Other locals drawer.
+- Python emits per-statement syntactic references without evaluating expressions.
+  New matrix traces no longer use stale function-wide i/j cursors. Simple name/
+  literal indices mark referenced cells before execution; ambiguous expressions
+  get no guessed coordinate. Old traces retain their existing renderer fallback.
+- Preserved list-of-tuples identity separately from serialized values; directions
+  no longer become a matrix. Relevant now ranks references then changes, capped at
+  six; remaining locals stay available. No variable is deleted from the trace.
+- 132 TypeScript and 122 Python tests pass; lint/build/Pyodide smoke/gallery pass.
+  Inspected actual 400px panel fixture. Live LeetCode verification remains pending.
+- Next within BFS: verified dequeued-current/candidate relationships, observed
+  effects, level/frontier boundaries and event navigation. The implementation
+  deliberately shows a normal waiting queue until these are proven; the design
+  preview is a target, not a claim these features are implemented. Stay on BFS
+  before proceeding to the separately planned DFS pass.
+
+### 2026-09-07 — Visual refinement design review (no app implementation)
+
+- Read the supplied refinement DOCX, including its current/target screenshots.
+- Created `docs/VISUAL_REFINEMENT_PLAN.md`: grid/queue/BFS first, then separate
+  tree/DFS, backtracking, array, linked structure, DP and heap passes. Distinguishes
+  cosmetic refinements from semantic metadata and unsupported graph scope.
+- Added `docs/previews/refinement.html` and `bfs-concept.png` for user review.
+  Interactive illustrative states: inspect, update, enqueue; rewind, cell
+  inspection, local-value drawers, and 400/550px width selection.
+- Browser-rendered at 400px; fixture interaction checks pass. Production files
+  were not changed during this design pass. Await the user's visual feedback
+  before implementing the first slice; existing prior work remains intact.
+
+### 2026-09-07 — Extension reload recovery
+
+- Fixed synchronous `Extension context invalidated` errors from testcase/editor
+  notifications and the floating button. Previously `.catch()` only handled
+  rejected promises, not exceptions thrown before a promise was returned.
+- Stops testcase/editor polling, disconnects the editor observer, removes input
+  listeners and clears stale annotations when the content runtime disappears.
+- The old floating button explains that the LeetCode page needs a refresh.
+  Pending extraction replies are skipped if their runtime has disappeared.
+- Added five regression tests for synchronous/asynchronous invalidation, missing
+  runtime, temporary receiver failures, and refresh guidance. 128 tests pass.
+- Reload the extension and then refresh open LeetCode tabs to load this fix.
+  Existing error entries can be cleared in Chrome; live reload remains a manual check.
+
+### 2026-09-07 — Tree recursion walkthrough and node highlighting
+
+- Keeps the enclosing tree visible through recursive subtree and empty-child calls.
+  Child mutations update that diagram without changing earlier snapshots.
+- Adds current-node, active-path, entered and returned states; actual call/return
+  edges show directional arrows (returns are dashed).
+- Shows first-entry order with clickable timeline jumps and the last eight call/
+  return events. This is call-entry order, not an assumed preorder output.
+- Stack frames label the tree argument value, including None. Tree traversal
+  cards appear before the stack/details so the diagram is visible immediately.
+- Traversal inference requires an unambiguous tree parameter in an observed
+  recursive function. Multiple-tree-argument algorithms retain variable pointers
+  without guessing which argument is being traversed. Serialization/depth limits
+  still apply; a return does not prove every descendant was explored.
+- Added seven regression tests for context, None, duplicate values, right-first
+  order, early exit, mutations, ambiguity, backward history and entry navigation.
+- Validation: 123 Vitest tests, lint, production build, Pyodide smoke and gallery
+  passed; inspected the rendered panel at 400px width. Python source unchanged.
+- Live LeetCode check remains: trace a tree DFS, step into None and back out,
+  scrub backward, and select an entry chip. Reload the extension from dist first.
+- Preview browser profile files are already tracked despite .gitignore; reverted
+  only the generated profile/screenshot changes from this session.
 
 ### 2026-09-07 — Tally feedback and monetization planning
 

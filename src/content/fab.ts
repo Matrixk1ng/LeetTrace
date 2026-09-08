@@ -1,4 +1,4 @@
-import type { Message } from '../shared/types';
+import { hasExtensionContext, sendContentMessage } from './runtime';
 const FAB_ID = 'leettrace-floating-action-button';
 const FAB_CLASS = 'leettrace-fab';
 const FAB_ICON_CLASS = 'leettrace-fab-icon';
@@ -34,7 +34,9 @@ export function injectFAB(): void {
   fab.appendChild(icon);
 
   const showFallback = () => {
-    fab.title = 'Click the LeetTrace extension icon in the Chrome toolbar to open the panel.';
+    fab.title = hasExtensionContext()
+      ? 'Click the LeetTrace extension icon in the Chrome toolbar to open the panel.'
+      : 'LeetTrace was reloaded or updated. Refresh this LeetCode page to reconnect.';
     fab.setAttribute('aria-label', fab.title);
     let note = document.getElementById('leettrace-panel-help');
     if (!note) {
@@ -47,7 +49,7 @@ export function injectFAB(): void {
     note.textContent = fab.title;
   };
   fab.addEventListener('click', () => {
-    void chrome.runtime.sendMessage({ type: 'OPEN_PANEL' } satisfies Message)
+    void sendContentMessage({ type: 'OPEN_PANEL' })
       .then(response => {
         if (!response?.ok) showFallback();
         else document.getElementById('leettrace-panel-help')?.remove();

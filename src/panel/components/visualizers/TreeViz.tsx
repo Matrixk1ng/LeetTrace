@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import type { DataStructureState, NodePointer } from '../../../shared/types';
 import { formatValue, truncate } from './format';
 
 interface TreeVizProps {
   dataStructure: DataStructureState;
+  onSelectStep?: (step: number) => void;
   previousDataStructure?: DataStructureState | null;
 }
 
@@ -64,7 +65,9 @@ function layout(root: SerializedNode | null, maxDepth: number): Placed[] {
   return placed;
 }
 
-export default function TreeViz({ dataStructure, previousDataStructure }: TreeVizProps) {
+export default function TreeViz({ dataStructure, previousDataStructure, onSelectStep }: TreeVizProps) {
+  const markerId = useId().replace(/:/g, '');
+  const traversal = dataStructure.traversal;
   const [expanded, setExpanded] = useState(false);
   const root = (dataStructure.data as { root?: SerializedNode | null })?.root ?? null;
   const allNodes = layout(root, Infinity);
@@ -95,8 +98,17 @@ export default function TreeViz({ dataStructure, previousDataStructure }: TreeVi
   const cy = (node: Placed) => PADDING + node.y * Y_GAP + RADIUS;
 
   return (
-    <div className="overflow-x-auto pb-1">
+    <div className="pb-1">
+      {traversal && <div className="mb-3 rounded-lg border border-trace-border p-2 text-xs">
+        <p className="font-semibold text-trace-text-primary">{traversal.action?.kind === 'empty' ? 'Empty child — check the base case' :
+          traversal.action?.kind === 'return' ? (traversal.action.nodeId ? 'Returning from node ' + formatValue(traversal.action.value) : 'Returning from an empty child') :
+          traversal.currentNodeId ? 'Exploring node ' + (allNodes.find(n => n.id === traversal.currentNodeId)?.label ?? '') : traversal.path.length ? 'Empty child — check the base case' : 'Recursive call finished'}</p>
+        <p className="mt-1 text-trace-text-secondary">Follow one branch; return to the caller when its call finishes.</p>
+      </div>}
+      <div className="overflow-x-auto">
+
       <svg className="mx-auto" width={width} height={height} role="img" aria-label={`tree with ${nodes.length} nodes`}>
+        <defs><marker id={markerId} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
         {/* Edges first, so the circles sit on top of them. */}
         {nodes.map((node) =>
           node.parent ? (
@@ -106,23 +118,30 @@ export default function TreeViz({ dataStructure, previousDataStructure }: TreeVi
               y1={cy(node.parent) + RADIUS}
               x2={cx(node)}
               y2={cy(node) - RADIUS}
-              stroke="#2d3a5c"
-              strokeWidth={1.5}
+              stroke={node.id && traversal?.path.includes(node.id) ? '#38bdf8' : '#2d3a5c'}
+              strokeDasharray={traversal?.action?.kind === 'return' && traversal.action.nodeId === node.id ? '4 3' : undefined}
+              markerStart={traversal?.action?.kind === 'return' && traversal.action.nodeId === node.id && traversal.action.parentId === node.parent.id ? 'url(#' + markerId + ')' : undefined}
+              markerEnd={traversal?.action?.kind === 'enter' && traversal.action.nodeId === node.id && traversal.action.parentId === node.parent.id ? 'url(#' + markerId + ')' : undefined}
+              strokeWidth={node.id && traversal?.path.includes(node.id) ? 2.5 : 1.5}
             />
           ) : null,
         )}
 
         {nodes.map((node) => {
           const cursors = cursorsByOrder.get(node.order) ?? [];
-          const accent = cursors[0]?.color ?? (node.id && previousCursorIds.has(node.id) ? '#fbbf24' : undefined);
+          const state = node.id === traversal?.currentNodeId ? 'Current' :
+            node.id && traversal?.path.includes(node.id) ? 'Active path' :
+            node.id && traversal?.returnedNodeIds.includes(node.id) ? 'Returned' :
+            traversal?.entered.some(e => e.nodeId === node.id) ? 'Entered' : '';
+          const accent = ({Current: '#fb923c', 'Active path': '#38bdf8', Returned: '#4ade80', Entered: '#a78bfa'} as Record<string, string>)[state] ?? cursors[0]?.color ?? (node.id && previousCursorIds.has(node.id) ? '#fbbf24' : undefined);
 
           return (
-            <g key={`node-${node.order}`}>
+            <g key={`node-${node.order}`} data-node-id={node.id} data-state={state}>
               <circle
                 cx={cx(node)}
                 cy={cy(node)}
                 r={RADIUS}
-                fill={accent ? 'rgba(167, 139, 250, 0.18)' : '#16213e'}
+                fill={state === 'Current' ? '#9a3412' : accent ? 'rgba(56,189,248,0.12)' : '#16213e'}
                 stroke={accent ?? '#2d3a5c'}
                 strokeWidth={1.5}
               />
@@ -135,7 +154,7 @@ export default function TreeViz({ dataStructure, previousDataStructure }: TreeVi
               >
                 {truncate(node.label, 4)}
               </text>
-              <title>{node.label}</title>
+              <title>{node.label + (state ? ' — ' + state : '')}</title>
 
               {cursors.map((cursor, stackIndex) => (
                 <text
@@ -153,13 +172,35 @@ export default function TreeViz({ dataStructure, previousDataStructure }: TreeVi
           );
         })}
       </svg>
+      </div>
 
       {allNodes.some(n => n.y >= 6) ? <button type="button" className="my-2 text-xs text-trace-accent" onClick={() => setExpanded(!expanded)}>
         {expanded ? 'Show first 6 levels' : 'Expand ' + hidden + ' deeper nodes'}
       </button> : null}
       <p className="text-xs text-trace-text-secondary mb-2">Top node = root · branches lead to left and right children.
         {(dataStructure.nodePointers?.length ?? 0) > 0 ? ' Labels show where node variables point.' : ''}
-        {previousCursorIds.size > 0 ? ' Amber marks the previous cursor.' : ''}</p>
+        {!traversal && previousCursorIds.size > 0 ? ' Amber marks the previous cursor.' : ''}</p>
+      {traversal && <div className="my-3 space-y-3 text-xs">
+        <div className="flex flex-wrap gap-x-3 gap-y-1" aria-label="Node highlight legend">
+          <span style={{color:'#fb923c'}}>● Current</span><span style={{color:'#38bdf8'}}>● Active path</span>
+          <span style={{color:'#4ade80'}}>● Returned</span><span style={{color:'#a78bfa'}}>● Entered</span>
+        </div>
+        <div><p className="font-semibold text-trace-text-secondary">First entered</p>
+          <p className="mb-2 text-trace-text-muted">Call-entry order, not output order. Select a node to revisit its first call.</p>
+          <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+            {traversal.entered.map((entry, i) => <button key={entry.nodeId} type="button" disabled={!onSelectStep}
+              onClick={() => onSelectStep?.(entry.step)} title={'Entry ' + (i + 1) + ' · step ' + (entry.step + 1)}
+              className="rounded border border-trace-border px-2 py-1 font-mono text-trace-accent hover:bg-trace-bg-card">
+              <span className="text-trace-text-muted">{i + 1}. </span>{truncate(formatValue(entry.value), 12)}
+            </button>)}
+          </div>
+        </div>
+        <details><summary className="cursor-pointer text-trace-text-secondary">Recent calls and returns</summary>
+          <ol className="mt-2 space-y-1 text-trace-text-secondary">{traversal.events.slice(-8).map(e =>
+            <li key={e.step}>Step {e.step + 1} · {e.kind === 'enter' ? '↓ Enter ' : e.kind === 'empty' ? '↳ Empty child' : '↑ Return from '}{e.kind !== 'empty' ? e.nodeId ? formatValue(e.value) : 'empty child' : ''}</li>
+          )}</ol>
+        </details>
+      </div>}
       <div className="text-trace-text-muted" style={{ fontSize: 10 }}>
         {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'} · depth {depth}
       </div>

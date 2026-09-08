@@ -17,7 +17,15 @@ const MAX_GUTTER_VARS = 4;
 
 function buildGutterAnnotations(snapshot: Snapshot | null): GutterAnnotation[] {
   if (!snapshot) return [];
-  return visibleVariables(snapshot).slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
+  const referenced = new Set(snapshot.visual?.names ?? []);
+  return visibleVariables(snapshot)
+    // Diagrams belong in the panel. Keep editor badges short and scalar-only,
+    // including Python's serialized non-finite floats but not object reprs.
+    .filter(([, v]) => ['int', 'float', 'bool', 'NoneType', 'str'].includes(v.type) &&
+      (v.value === null || typeof v.value === 'number' || typeof v.value === 'boolean' ||
+        typeof v.value === 'string' && v.value.length <= 24))
+    .sort(([a], [b]) => Number(referenced.has(b)) - Number(referenced.has(a)))
+    .slice(0, MAX_GUTTER_VARS).map(([variable, v]) => ({
     variable, value: formatTraceValue(v.value, v.type), changed: v.changed,
   }));
 }

@@ -1,3 +1,4 @@
+import { hasExtensionContext, sendContentMessage } from './runtime';
 import { watchTestCases } from './testcase';
 import { extractCode, isDebugEnabled } from './editor-hook';
 import { injectFAB } from './fab';
@@ -11,28 +12,41 @@ const EDITOR_POLL_INTERVAL_MS = 500;
 let editorObserver: MutationObserver | null = null;
 let observedRoot: Element | null = null;
 let stale = false;
+let disposed = false;
+let editorPoll: number | undefined;
+const listeners = new AbortController();
+
+function dispose(): void {
+  if (disposed) return;
+  disposed = true;
+  testCaseWatcher.dispose();
+  window.clearInterval(editorPoll);
+  editorObserver?.disconnect();
+  listeners.abort();
+  clearGutterAnnotations();
+}
 
 const testCaseWatcher = watchTestCases(() => {
   clearGutterAnnotations();
   stale = true;
-  void chrome.runtime.sendMessage({ type: 'TESTCASE_CHANGED' } satisfies Message).catch(() => {});
+  void sendContentMessage({ type: 'TESTCASE_CHANGED' }, dispose);
 });
 
 function markStale(): void {
   clearGutterAnnotations();
-  if (stale) return;
+  if (stale || disposed) return;
   stale = true;
-  void chrome.runtime.sendMessage({ type: 'TRACE_STALE' } satisfies Message).catch(() => {});
+  void sendContentMessage({ type: 'TRACE_STALE' }, dispose);
 }
 
 window.addEventListener('message', event => {
   if (event.source === window && event.origin === window.location.origin &&
       event.data?.type === 'LEETTRACE_MODEL_CHANGED') markStale();
-});
-window.addEventListener('popstate', markStale);
+}, { signal: listeners.signal });
+window.addEventListener('popstate', markStale, { signal: listeners.signal });
 document.addEventListener('input', event => {
   if ((event.target as Element)?.closest('.monaco-editor')) markStale();
-});
+}, { signal: listeners.signal });
 
 async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise<ExtractCodeResponse['payload']> {
 	const payload = await extractCode();
@@ -52,7 +66,8 @@ async function runExtraction(source: 'runtime-message' | 'debug-event'): Promise
 }
 
 function waitForMonacoEditorAndObserve(): void {
-  window.setInterval(() => {
+  editorPoll = window.setInterval(() => {
+    if (!hasExtensionContext()) { dispose(); return; }
     const root = document.querySelector('.monaco-editor');
     if (root === observedRoot) return;
     if (observedRoot) markStale();
@@ -71,12 +86,15 @@ chrome.runtime.onMessage.addListener((
 	_sender,
 	sendResponse: (response: ExtractCodeResponse) => void,
 ) => {
+	if (disposed || !hasExtensionContext()) { dispose(); return false; }
 	if (message?.type === 'EXTRACT_CODE') {
 		void runExtraction('runtime-message')
 			.then((payload) => {
+				if (!hasExtensionContext()) { dispose(); return; }
 				sendResponse({ ok: true, payload });
 			})
 			.catch((error: unknown) => {
+				if (!hasExtensionContext()) { dispose(); return; }
 				const fallbackPayload = { code: '', language: 'unsupported', examples: [] };
 				console.warn('[LeetTrace][content] EXTRACT_CODE failed', error);
 				sendResponse({ ok: false, payload: fallbackPayload, error: error instanceof Error ? error.message : 'Could not read the selected testcase.' });
@@ -104,19 +122,19 @@ chrome.runtime.onMessage.addListener((
 
 if (isDebugEnabled()) {
 	window.addEventListener(DEBUG_EVENT, () => {
-		void runExtraction('debug-event');
-	});
+		void runExtraction('debug-event').catch(() => { if (!hasExtensionContext()) dispose(); });
+	}, { signal: listeners.signal });
 
 	window.addEventListener(DEBUG_GUTTER_UPDATE_EVENT, () => {
 		updateGutterAnnotations(0, [
 			{ variable: 'i', value: '2', changed: true },
 			{ variable: 'num', value: '7', changed: false },
 		]);
-	});
+	}, { signal: listeners.signal });
 
 	window.addEventListener(DEBUG_GUTTER_CLEAR_EVENT, () => {
 		clearGutterAnnotations();
-	});
+	}, { signal: listeners.signal });
 }
 
 injectFAB();

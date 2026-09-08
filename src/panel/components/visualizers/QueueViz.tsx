@@ -28,7 +28,8 @@ export default function QueueViz({ dataStructure, previousDataStructure }: Queue
     previous.length > 0 &&
     items.length < previous.length &&
     formatValue(previous[0]) !== formatValue(items[0]);
-  const enqueued = items.length > previous.length;
+  const enqueued = previousDataStructure !== null && items.length > previous.length &&
+    previous.every((value, i) => formatValue(value) === formatValue(items[i]));
 
   const visible = items.slice(0, MAX_VISIBLE);
   const hidden = items.length - visible.length;
@@ -44,11 +45,10 @@ export default function QueueViz({ dataStructure, previousDataStructure }: Queue
         </span>
       </div>
 
-      <div className="flex items-center overflow-x-auto pb-1" style={{ gap: 3 }}>
+      <div className="flex flex-wrap items-center pb-1" style={{ gap: 5 }}>
         {visible.map((value, index) => {
           const isFront = index === 0;
-          const isBack = index === items.length - 1;
-          const isNew = enqueued && isBack;
+          const isNew = enqueued && index >= previous.length;
           const text = formatValue(value);
 
           return (
@@ -69,7 +69,7 @@ export default function QueueViz({ dataStructure, previousDataStructure }: Queue
               }}
               title={text}
             >
-              {truncate(text, 6)}
+              {truncate(text, Array.isArray(value) ? 24 : 12)}
             </div>
           );
         })}

@@ -102,13 +102,14 @@ export default function Controls({ requestTrace }: ControlsProps) {
   const isBusy = state.status === 'loading';
   const playbackDisabled = state.status === 'idle' || state.status === 'loading' || state.totalSteps === 0;
   const traceDisabled = state.status === 'loading' || state.status === 'running';
+  const compact = state.detectedPattern?.type === 'bfs';
 
   const handleSpeedChange = (event: ChangeEvent<HTMLInputElement>) => {
     dispatch({ type: 'SET_SPEED', payload: MAX_SPEED + MIN_SPEED - Number(event.target.value) });
   };
 
   return (
-    <section className="shrink-0 border-b border-trace-border bg-trace-bg-card/90 px-4 py-3">
+    <section className={'shrink-0 border-b border-trace-border bg-trace-bg-card/90 px-4 ' + (compact ? 'py-2' : 'py-3')}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <IconButton
@@ -154,17 +155,17 @@ export default function Controls({ requestTrace }: ControlsProps) {
         </button>
       </div>
 
-      {state.testCase ? <details className="mt-3 text-xs text-trace-text-secondary">
+      {state.testCase ? <details className={(compact ? 'mt-1' : 'mt-3') + ' text-xs text-trace-text-secondary'}>
         <summary className="cursor-pointer">Tracing {state.testCase.label}</summary>
         <pre className="mt-2 whitespace-pre-wrap break-all max-h-24 overflow-auto">{state.testCase.input}</pre>
       </details> : null}
-      <label className="mt-3 block text-xs text-trace-text-secondary" htmlFor="trace-step">Timeline</label>
+      <label className={compact ? 'sr-only' : 'mt-3 block text-xs text-trace-text-secondary'} htmlFor="trace-step">Timeline</label>
       <input id="trace-step" type="range" min={0} max={Math.max(0, state.totalSteps - 1)}
         value={state.currentStep} disabled={playbackDisabled} className="w-full"
         style={{ "--value": String(state.currentStep / Math.max(1, state.totalSteps - 1)) } as React.CSSProperties}
         aria-valuetext={'Step ' + (state.currentStep + 1) + ' of ' + state.totalSteps}
         onChange={event => { dispatch({ type: 'PAUSE' }); dispatch({ type: 'SET_STEP', payload: Number(event.target.value) }); }} />
-      <div className="mt-3 flex items-end justify-between gap-3">
+      <div className={(compact ? 'mt-1' : 'mt-3') + ' flex items-end justify-between gap-3'}>
         <div className="text-sm text-trace-text-secondary">
           Step <span className="font-[JetBrains_Mono,ui-monospace,SFMono-Regular,Menlo,monospace] text-trace-text-primary">{state.totalSteps === 0 ? 0 : state.currentStep + 1}</span>
           <span className="font-[JetBrains_Mono,ui-monospace,SFMono-Regular,Menlo,monospace]"> / {state.totalSteps}</span>
