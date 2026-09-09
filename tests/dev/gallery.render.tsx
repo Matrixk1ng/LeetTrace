@@ -79,9 +79,24 @@ const gridRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c',
 const gridSnapshots = processSnapshots(gridRaw.snapshots, createTraceContext(gridRaw.indexing));
 const gridStep = gridSnapshots.findIndex(s => s.visual?.cells.some(c => c.structure === 'grid') &&
   s.variables.nr?.value === 0 && s.variables.nc?.value === 1 && s.gridSearch?.current);
+
+const dfsRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c',
+  "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/tree-search-example.py').read_text(), ['root = [8,4,12,2,6,10,14]']))"
+], {cwd:ROOT, encoding:'utf8'}));
+const dfsSnapshots = processSnapshots(dfsRaw.snapshots, createTraceContext(dfsRaw.indexing));
+const dfsStep = dfsSnapshots.findIndex(s => s.event === 'return' && s.callStack.at(-1)?.treeNode?.value === 2);
+const recursionRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c',
+  "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/recursion-example.py').read_text(), ['m = 3, n = 3']))"
+], {cwd:ROOT, encoding:'utf8'}));
+const recursionSnapshots = processSnapshots(recursionRaw.snapshots, createTraceContext(recursionRaw.indexing));
+const recursionStep = recursionSnapshots.find(s => s.event === 'call' && s.frameName === 'dfs' && s.variables.row?.value === 2 && s.variables.col?.value === 1)!;
 function Gallery() {
   return (
     <div style={{ width: 400 }}>
+      <div className="panel-preview"><TraceContext.Provider value={{state:{...initialState,status:'paused',
+        testCase:{label:'Case 1',input:'root = [8,4,12,2,6,10,14]'},snapshots:dfsSnapshots,currentStep:dfsStep,totalSteps:dfsSnapshots.length,returnValue:dfsRaw.returnValue,
+        detectedPattern:{type:'dfs',confidence:.8,description:'Recursive tree traversal.'}},dispatch:()=>{}}}><App/></TraceContext.Provider></div>
+      <Card title="Numeric recursion — parameters at every depth"><CallStackViz frames={recursionStep.callStack} event={recursionStep.event}/></Card>
       <div className="panel-preview"><TraceContext.Provider value={{state:{...initialState,status:'paused',
         testCase:{label:'Case 1',input:'grid = [[2,1,1],[1,1,0],[0,1,1]]'},snapshots:gridSnapshots,currentStep:Math.max(0,gridStep),totalSteps:gridSnapshots.length,returnValue:gridRaw.returnValue,
         detectedPattern:{type:'bfs',confidence:.8,description:'Queue-based search.'}},dispatch:()=>{}}}><App/></TraceContext.Provider></div>
@@ -227,8 +242,88 @@ ${renderToStaticMarkup(<Gallery />)}
 
   mkdirSync(HERE, { recursive: true });
   writeFileSync(join(HERE, 'gallery.html'), html, 'utf8');
+  // Real Python fixtures for the approved recursion and table designs.
+  mkdirSync(join(HERE, 'refinement.local'), { recursive: true });
+  for (const family of ['top-down', 'bottom-up']) {
+    const raw: RawTraceResult = JSON.parse(execFileSync('python', ['-c',
+      `import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/dp-${family}-example.py').read_text(), ['n = 5']))`
+    ], { cwd: ROOT, encoding: 'utf8' }));
+    expect(raw.error).toBeNull();
+    expect(raw.returnValue).toBe(8);
+    const snapshots = processSnapshots(raw.snapshots, createTraceContext(raw.indexing));
+    const currentStep = family === 'top-down'
+      ? snapshots.findIndex(s => s.visual?.learning?.some(e => e.kind === 'stored-return' && e.key === 2) && snapshots.filter(p => p.step < s.step && p.frameId === s.frameId && p.visual?.learning?.some(e => e.kind === 'memo-write')).length === 0)
+      : snapshots.findIndex(s => s.visual?.learning?.some(e => e.kind === 'table-write' && e.key === 4));
+    expect(currentStep).toBeGreaterThan(0);
+    for (const width of [400, 550]) {
+      const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'n = 5' }, snapshots, currentStep, totalSteps: snapshots.length, detectedPattern: raw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+      writeFileSync(join(HERE, 'refinement.local', `dp-${family}-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace ${family}</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}<script>const walk=document.querySelector('.rd-walk');if(walk)walk.scrollTop=walk.scrollHeight;</script></html>`, 'utf8');
+    }
+  }
 
   expect(html).toContain('visualizer gallery');
+  const pairRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/two-pointer-example.py').read_text(), ['nums = [1,3,4,6,8,10], target = 12']))"], { cwd: ROOT, encoding: 'utf8' }));
+  expect(pairRaw.error).toBeNull();
+  const pairSnapshots = processSnapshots(pairRaw.snapshots, createTraceContext(pairRaw.indexing));
+  const pairStep = pairSnapshots.findIndex(s => s.visual?.pair?.kind === 'move');
+  expect(pairStep).toBeGreaterThan(0);
+  for (const width of [400, 550]) {
+    const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'nums = [1,3,4,6,8,10], target = 12' }, snapshots: pairSnapshots, currentStep: pairStep, totalSteps: pairSnapshots.length, detectedPattern: pairRaw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+    writeFileSync(join(HERE, 'refinement.local', `two-pointer-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace two pointers</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`, 'utf8');
+  }
+  expect(dfsRaw.error).toBeNull();
+  const windowRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/sliding-window-example.py').read_text(), ['nums = [2,1,5,1,3,2], k = 3']))"], { cwd: ROOT, encoding: 'utf8' }));
+  expect(windowRaw.error).toBeNull();
+  const windowSnapshots = processSnapshots(windowRaw.snapshots, createTraceContext(windowRaw.indexing));
+  const windowStep = windowSnapshots.findIndex(s => s.visual?.window?.kind === 'remove');
+  expect(windowStep).toBeGreaterThan(0);
+  for (const width of [400, 550]) {
+    const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'nums = [2,1,5,1,3,2], k = 3' }, snapshots: windowSnapshots, currentStep: windowStep, totalSteps: windowSnapshots.length, detectedPattern: windowRaw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+    writeFileSync(join(HERE, 'refinement.local', `sliding-window-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace sliding window</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`, 'utf8');
+  }
+  expect(dfsStep).toBeGreaterThan(0);
+  const variableRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/variable-window-example.py').read_text(), ['target = 7, nums = [2,3,1,2,4,3]']))"], { cwd: ROOT, encoding: 'utf8' }));
+  expect(variableRaw.error).toBeNull();
+  const variableSnapshots = processSnapshots(variableRaw.snapshots, createTraceContext(variableRaw.indexing));
+  const variableStep = variableSnapshots.findIndex(s => s.visual?.window?.kind === 'condition' && s.visual.window.total === 7 && s.visual.window.condition?.outcome);
+  expect(variableStep).toBeGreaterThan(0);
+  for (const width of [400, 550]) {
+    const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'target = 7, nums = [2,3,1,2,4,3]' }, snapshots: variableSnapshots, currentStep: variableStep, totalSteps: variableSnapshots.length, detectedPattern: variableRaw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+    writeFileSync(join(HERE, 'refinement.local', `variable-window-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace variable window</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`, 'utf8');
+  }
+  const binaryRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/binary-search-example.py').read_text(), ['nums = [1,3,5,7,9,11,13], target = 11']))"], { cwd: ROOT, encoding: 'utf8' }));
+  expect(binaryRaw.error).toBeNull();
+  const binarySnapshots = processSnapshots(binaryRaw.snapshots, createTraceContext(binaryRaw.indexing));
+  const binaryStep = binarySnapshots.findIndex(s => s.visual?.binary?.kind === 'move');
+  expect(binaryStep).toBeGreaterThan(0);
+  for (const width of [400, 550]) {
+    const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'nums = [1,3,5,7,9,11,13], target = 11' }, snapshots: binarySnapshots, currentStep: binaryStep, totalSteps: binarySnapshots.length, detectedPattern: binaryRaw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+    writeFileSync(join(HERE, 'refinement.local', `binary-search-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace variable window</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`, 'utf8');
+  }
+  const linkedRaw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; from pathlib import Path; sys.path.insert(0, 'src/offscreen'); import tracer; print(tracer.run_traced(Path('tests/dev/linked-list-example.py').read_text(), ['head = [2,4,7]']))"], { cwd: ROOT, encoding: 'utf8' }));
+  expect(linkedRaw.error).toBeNull();
+  const linkedSnapshots = processSnapshots(linkedRaw.snapshots, createTraceContext(linkedRaw.indexing));
+  const linkedStep = linkedSnapshots.length - 4;
+  expect(linkedStep).toBeGreaterThan(0);
+  for (const width of [400, 550]) {
+    const panel = renderToStaticMarkup(<TraceContext.Provider value={{ state: { ...initialState, status: 'paused', testCase: { label: 'Case 1', input: 'head = [2,4,7]' }, snapshots: linkedSnapshots, currentStep: linkedStep, totalSteps: linkedSnapshots.length, detectedPattern: linkedRaw.pattern ?? null }, dispatch: () => {} }}><App /></TraceContext.Provider>);
+    writeFileSync(join(HERE, 'refinement.local', `linked-list-${width}.html`), `<!doctype html><html lang="en"><meta charset="utf-8"><title>LeetTrace variable window</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`, 'utf8');
+  }
+  const batchCases: { id: string; body: string }[] = JSON.parse(readFileSync(join(ROOT, 'tests/dev/batch-examples.json'), 'utf8'));
+  for (const fixture of batchCases) {
+    const source = 'def solve():\n' + fixture.body.split('\n').map(line => '    '+line).join('\n') + '\nresult = solve()';
+    const raw: RawTraceResult = JSON.parse(execFileSync('python', ['-c', "import sys; sys.path.insert(0,'src/offscreen'); import tracer; print(tracer.run_traced(sys.argv[1], []))", source], { cwd: ROOT, encoding: 'utf8', maxBuffer: 8*1024*1024 }));
+    expect(raw.error).toBeNull();
+    const snapshots = processSnapshots(raw.snapshots, createTraceContext(raw.indexing));
+    const step = snapshots.findLastIndex(s => s.frameName === 'solve' && s.event !== 'return' && s.dataStructures.length > 0);
+    if (step < 0) continue;
+    for (const width of [400,550]) {
+      const panel = renderToStaticMarkup(<TraceContext.Provider value={{state:{...initialState,status:'paused',snapshots,currentStep:step,totalSteps:snapshots.length,detectedPattern:raw.pattern??null},dispatch:()=>{}}}><App/></TraceContext.Provider>);
+      writeFileSync(join(HERE,'refinement.local',`batch-${fixture.id}-${width}.html`),`<!doctype html><html><meta charset="utf-8"><title>LeetTrace ${fixture.id}</title><style>${css}body{margin:0;background:#11182a}body>div{width:${width}px;height:1000px}</style>${panel}</html>`,'utf8');
+    }
+  }
+  expect(recursionStep.callStack.at(-1)?.arguments?.row.value).toBe(2);
+  expect(recursionStep.callStack.at(-1)?.arguments?.col.value).toBe(1);
   expect(gridRaw.error).toBeNull();
   expect(gridStep).toBeGreaterThan(0);
   expect(gridSnapshots[gridStep].gridSearch?.frontier).toBeDefined();

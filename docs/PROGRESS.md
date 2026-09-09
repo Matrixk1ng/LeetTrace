@@ -32,12 +32,266 @@
 |---|---|
 | `npm run lint` | 0 errors |
 | `npm run build` | ok |
-| `npm test` (vitest) | 141 passed |
-| `npm run test:tracer` (pytest) | 124 passed |
+| `npm test` (vitest) | 203 passed |
+| `npm run test:tracer` (pytest) | 191 passed |
 | `npm run smoke:pyodide` | all pass |
 | `npm run gallery` | writes `tests/dev/gallery.html` |
 
 ## 3. Session notes
+
+### Array pointer visibility restored
+
+- Restored full-cell colors using each pointer's existing color, with larger matching variable labels. Overlapping pointers share a split-color cell and retain separate labels.
+- Kept operation changes visible with a green dot on colored cells; clarified the outline/change legend.
+- Verified pointer movement and rewind: 204 TypeScript tests passed, lint and production build passed, gallery passed. Inspected the actual component in a 400px Chrome render. Live LeetCode verification remains manual.
+
+### 2026-09-08 — Approved batch implemented
+
+- Implemented the approved batch using shared execution-derived operations and
+  collection/graph/parent/interval/trie views, alongside existing specialized
+  views. Full family mapping and supported scope: `BATCH_IMPLEMENTATION.md`.
+- Added observed branch outcomes, operand references, before/after values,
+  collection effects, tuple-key memo reuse, standard cache counters, source-bound
+  search/window intervals and mutations in the nested backtracking walkthrough.
+- Added 36 real fixture programs; 38 Python and 38 TypeScript checks cover the
+  new batch. Full suite: 203 TS / 191 Python. Build, Pyodide smoke and gallery
+  verified; gallery timeout increased for the 72 additional real-panel renders.
+- Reviewed actual 400 px captures for graph, trie and binary bounds; fixed
+  clipping, stale inspection and source labels found during review.
+- No publishing/commits. Reload extension, refresh LeetCode and retrace for the
+  new metadata. Live LeetCode integration remains unverified.
+
+### 2026-09-08 — All remaining refinements: batch preview gallery
+
+- User changed the workflow: preview all remaining families together, collect
+  corrections/approval, then implement the approved batch together.
+- Created `previews/batch/index.html`: 22 families / 43 interactive examples,
+  including collections, graph algorithms, revised nested-call backtracking,
+  sorting, interval timelines and remaining DP/window/search/pointer variants.
+- Added `BATCH_REFINEMENT_REVIEW.md` with direct example links and approval
+  checklist. All entries await review; no production implementation authorized
+  by this preview request.
+- Verified JS syntax, all 326 fixture states, routes, history/rewind, inspection
+  and graph endpoints. Captured representative Chrome layouts. No extension
+  source changes; prior production verification counts are unchanged.
+- Next: user reviews gallery and identifies fixes. Keep previews and production
+  semantics distinct, especially decorator caching and graph source bindings.
+
+### 2026-09-08 — Linked-list implementation + slow/fast preview
+
+- Implemented the approved combined linked-list view. Actual serialized next
+  links drive directed arrows; stable identities keep duplicate values distinct
+  across detached chains. Link writes and pointer assignments remain separate.
+- Added inspection, alias paths, change-history rewind, bounded horizontal
+  rendering and unknown state for unreachable nodes. Empty lists retain the
+  existing None display. Details in `LINKED_LIST_REFINEMENT_PLAN.md`.
+- Verified 165 TypeScript tests (four new real-trace linked-list regressions),
+  lint, build and gallery. Python tracer unchanged; prior 153 tests remain the
+  latest Python baseline. Inspected actual panel and next-preview Chrome renders.
+- Next: review `previews/slow-fast-refinement.html` and
+  `SLOW_FAST_REFINEMENT_PLAN.md`. Pointer movement, comparison and cycle result
+  appear separately. Production cycle-specific narration is not implemented.
+- Reload extension, refresh LeetCode, retrace. Live integration remains unverified;
+  changes are local and uncommitted.
+
+### 2026-09-08 — Linked-list preview arrows
+
+- Revised the preview following user feedback: each node now has a directed
+  next arrow to its destination or None. Reversal changes the arrow direction;
+  completed link changes are green, and resizing recalculates endpoints.
+- Verified original, partial and complete reversal, rewind and empty-list arrow
+  destinations. Inspected the updated Chrome render. Preview only; production
+  linked-list implementation still awaits design approval.
+
+### 2026-09-08 — Binary-search implementation + linked-list preview
+
+- Implemented the approved inclusive-bound binary-search slice. Source/runtime
+  bindings distinguish midpoint calculation, observed comparison and bound moves.
+  After bounds move, the old midpoint stays explicitly previous and unhighlighted.
+- Added candidate interval, cell inspection, paging, prefix-only comparison
+  history and event navigation. Empty intervals have no active cells. Supported
+  syntax and conservative fallbacks are in `BINARY_SEARCH_REFINEMENT_PLAN.md`.
+- Verified 161 TypeScript / 153 Python tests, lint/build/gallery/Pyodide smoke.
+  Pytest's cache permission warning was non-fatal; lint passed outside sandbox.
+  Captured actual 400/550 px binary-search renders; inspected the 400 px panel.
+- Prepared `previews/linked-list-refinement.html` and
+  `LINKED_LIST_REFINEMENT_PLAN.md` for review: stable node identities, separate
+  save-next/link-rewrite/pointer-move events, reachable paths, duplicate values,
+  empty input, inspection and rewind. Preview interaction checks passed and its
+  browser render was inspected. Production linked-list rendering is unchanged.
+- Reload the extension, refresh LeetCode and retrace to exercise the new adapter.
+  Live LeetCode integration remains unverified. Next: user review of linked lists.
+  All changes remain local; no commits or publishing.
+
+### 2026-09-08 — Variable-window implementation + binary-search preview
+
+- Implemented the approved positive-sum variable-window slice on the shared
+  membership model. Direct while-condition outcomes are pending until observed
+  body entry/exit; additions/removals clear earlier outcomes. Shortest lengths and
+  indices require completed builtin min assignments and matching included bounds.
+- UI shows condition, current length/sum, recorded shortest result, and valid
+  window history. Tests cover pending versus confirmed conditions, rewind, ties,
+  no result/single-value result, nonpositive/custom input abstention and shadowed
+  min without extra calls. Supported forms/fallbacks documented in the plan.
+- Verified 158 TypeScript / 148 Python tests, lint/build/Pyodide smoke/gallery.
+  Actual app fixtures reviewed at 400/550px; screenshots linked in the plan.
+- Prepared BINARY_SEARCH_REFINEMENT_PLAN.md and
+  `previews/binary-search-refinement.html`: inclusive search interval, distinct
+  midpoint/comparison/bound-update events, stale midpoint labelling, found/absent/
+  duplicate/empty cases. JSDOM checks and Chrome review passed. Preview only.
+- Reload extension, refresh LeetCode, and retrace. Next: user review of binary
+  search before implementation. No commits or publishing.
+
+### 2026-09-08 — Fixed-window implementation + next preview
+
+- Implemented the approved fixed-size sum view. Safe source bindings and observed
+  updates track included indices independently of pointers; mutation/unexplained
+  changes invalidate the model. Supports zero/slice-sum initialization and
+  separate add/remove operations, including temporary partial/oversized windows.
+- Full-window builtin max assignments record checked windows and improved result
+  indices. UI includes membership band, current/recorded-best totals, arithmetic,
+  cell paging/inspection and exact event history. Scope/fallbacks are documented
+  in SLIDING_WINDOW_REFINEMENT_PLAN.md.
+- Verification: 155 TypeScript / 143 Python tests, lint/build/Pyodide smoke/gallery
+  passed. Real app fixtures reviewed in Chrome at 400/550px. Tests cover negative
+  values, ties, width extremes, mutation, custom types, pointer timing and rewind.
+- Created `previews/variable-window-refinement.html` and
+  VARIABLE_WINDOW_REFINEMENT_PLAN.md for the next review: positive-sum shortest
+  window with expand/check/save/shrink, no-result and single-element cases.
+  Preview totals, outcomes, rewind and inspection checked with JSDOM; Chrome
+  layout reviewed. This next adapter is not yet implemented.
+- Reload extension, refresh LeetCode, and retrace for the new fixed-window metadata.
+  No commits or publishing. Next: review variable-size preview, then binary search.
+
+### 2026-09-08 — Sliding-window preview
+
+- User confirmed the two-pointer implementation works and requested the next
+  family. Prepared `SLIDING_WINDOW_REFINEMENT_PLAN.md` and the interactive
+  `previews/sliding-window-refinement.html`; production source unchanged.
+- Fixed-size maximum-sum example: included-range band, remove/add/check/save
+  events, separate current and best totals, best indices, and window history.
+  Includes all-negative and tied-result examples and 400/550 width controls.
+- Awaiting visual review before implementation. Variable-size windows are a
+  separate follow-up; preview event boundaries are explicitly illustrative.
+- JSDOM verified totals against included cells at every event, incomplete-window
+  checks, negative/tied best results, rewind, inspection and width switching.
+  Chrome layout reviewed; screenshot: `previews/sliding-window-concept.png`.
+
+### 2026-09-08 — Approved two-pointer implementation
+
+- Implemented an array/pointer view for observed builtin-integer pair-sum
+  assignments, with attached index labels, overlap handling, cell inspection,
+  paging and pointer jumps. Existing arrays remain the structural fallback.
+- Python confirms sums and simple branch outcomes without eval or user method
+  calls. Pointer changes and comparisons stay separate; moved pointers never
+  borrow an old pair's sum without an explicit previous-pair label.
+- Comparison history supports exact event jumps and prefix-only rewind. Neutral
+  operation explanations replace unproven sorting/elimination claims. Scope and
+  remaining two-pointer families documented in TWO_POINTER_REFINEMENT_PLAN.md.
+- Verified real traces for movement both ways, duplicates, meeting pointers,
+  empty/singleton inputs, custom arithmetic abstention, exceptions, history jumps
+  and rewind. 152 TS / 138 Python tests; lint, build and Pyodide smoke passed.
+  Gallery produces real app fixtures at 400/550px. Live LeetCode review still
+  requires reloading the extension and tab, then tracing again.
+- Next staged preview: sliding window. No commits or publishing this session.
+- Gallery passed and Chrome renders were reviewed at 400/550px; screenshots
+  are linked from TWO_POINTER_REFINEMENT_PLAN.md.
+
+### 2026-09-08 — Array/two-pointer preview
+
+- Prepared the next staged proposal in `TWO_POINTER_REFINEMENT_PLAN.md` and
+  `previews/two-pointer-refinement.html`; no production source changes.
+- Array indices, directly attached left/right labels, separate comparisons and
+  movements, explicit previous-pair equation during movement, and pair history.
+  Includes found/no-match/duplicate-value cases, cell inspection and 400/550 widths.
+- Next: user reviews this visual direction before ArrayViz and trace refinements.
+- JSDOM checks passed for comparison/movement separation, rewind, all three
+  outcomes, pointer overlap, cell/history inspection and width switching.
+  Chrome-rendered layout reviewed; screenshot: `previews/two-pointer-concept.png`.
+
+### 2026-09-08 — Approved recursion and DP implementation
+
+- Implemented the approved nested call/return walkthrough with parameter labels,
+  folded call results, current-call context, follow toggle and exact event jumps.
+  Existing tree and BFS renderers retain priority for their supported structures.
+- Added safe Python observations for direct dictionary saves/returns and builtin
+  one-dimensional list addition recurrences. Memo reuse needs a prior invocation's
+  save and no child expansion; a newly computed return is not labelled reuse.
+  Pending writes are canceled on exceptions. No user expressions are re-evaluated.
+- Bottom-up view shows actual table values, inputs/target, equations before and
+  after confirmed writes, recent writes and bounded cell inspection. Other
+  structures and call details remain available in expandable sections.
+- Added real memoized/bottom-up fixture pipelines and regression checks for
+  return values, rewind, folding, event jumps, false/zero values, failed writes,
+  side-effecting indices and custom container abstention. Full suite: 149 TS,
+  133 Python; lint/build/Pyodide smoke/gallery passed. Rendered app fixtures at
+  400/550px, with screenshots linked in RECURSION_DP_REFINEMENT_PLAN.md.
+- Scope: direct dictionary memo operations and one-dimensional two-entry addition
+  recurrences. Decorator caches, multidimensional DP and other operators fall back
+  to ordinary views. Live LeetCode integration still needs browser-user review:
+  reload extension, refresh the tab, and run a new Trace. No commits or publishing.
+
+### 2026-09-08 — Revised direction: recursion and DP
+
+- User rejected the path/choose/undo preview and supplied a nested recursive
+  recurrence walkthrough with returned values and memo reuse.
+- Created `previews/recursion-dp-refinement.html` with top-down nested calls,
+  foldable branches, actual illustrative return values, optional memo and a
+  separate bottom-up dependency/table view for the same f(5) = 8 example.
+- Added `RECURSION_DP_REFINEMENT_PLAN.md`; earlier backtracking proposal is
+  superseded and deferred. Production source unchanged; review comes first.
+- JSDOM checks passed for memo reuse without child expansion, return values,
+  plain recursion, folding, rewind, bottom-up read/write boundaries and widths.
+  Browser-reviewed top-down and bottom-up layouts; active-call breadcrumb keeps
+  caller context visible when the walkthrough scrolls.
+
+### 2026-09-08 — Backtracking preview for review
+
+- Created `previews/backtracking-refinement.html` and
+  `BACKTRACKING_REFINEMENT_PLAN.md` for the next staged refinement.
+- Path tiles, separate saved copies, parameterized stack, considering/choose/
+  call/return/resume/undo states, event playback and 400/550px width controls.
+  Starts at undo; the complete illustrative Subsets example has four results.
+- Checked return versus undo, saved results, rewind, completion, result inspection
+  and width switching with JSDOM. Preview-only checks; production source unchanged.
+- Next: user reviews this direction before bounded trace metadata and rendering
+  implementation. General backtracking detection is not implemented by this preview.
+
+### 2026-09-08 — Approved DFS refinement + parameters on all call stacks
+
+- User approved the DFS preview and requested parameter values for general call
+  stacks. Python captures actual bound arguments on call events; reconstruction
+  preserves each frame's entry values across recursion, returns and reassignment.
+- Includes defaults, keyword-only/positional-only arguments, varargs/kwargs and
+  underscore-prefixed parameters. Excludes self/cls and captured closure locals.
+  Failed argument serialization is contained, not allowed to fail execution.
+- Stack rows show compact parameter lists and expandable recorded values; current
+  return frame says Returning. Older frames expand on demand. Legacy traces need
+  a retrace for complete arguments; the existing tree-argument fallback remains.
+- DFS uses cyan current/path, dashed violet return edges, selectable nodes,
+  recorded first-call links, explicit None placeholder, compact embedded stack
+  without the duplicate card and previous/next call-event jumps. Large/deep trees
+  keep scrolling/expansion. Exact line controls remain intact.
+- Validation: 144 Vitest, 127 pytest, lint/build and Pyodide smoke pass. Gallery
+  verifies real Python BST and numeric uniquePaths recursion through React;
+  actual 400px/550px renders saved in docs/previews/dfs-implementation*.png.
+- Live LeetCode verification remains pending. Reload extension and page, then
+  rerun Trace to populate new arguments. Backtracking choose/undo is next;
+  no inferred pruning, result success, or special animation engine was added.
+
+### 2026-09-08 — Next refinement: tree + DFS preview
+
+- User requested the next structure/algorithm. Prepared the next staged visual
+  review, preserving the original preview-before-implementation workflow.
+- Added DFS_REFINEMENT_PLAN.md and docs/previews/dfs-refinement.html: cyan current
+  node/path, violet dashed returns, compact stack, None call, selectable nodes,
+  first-entry navigation, rewind, drawers and 400/550px sizing.
+- Preview uses a clearly labelled partial illustrative call sequence. No
+  production files changed; backtracking choose/undo stays a separate pass.
+- Verified preview transitions, empty-child/return states, rewind, keyboard node
+  inspection, first-entry navigation and width selection. Captured the 400px
+  browser render as docs/previews/dfs-concept.png.
+- Await visual feedback before implementing this DFS refinement.
 
 ### 2026-09-08 — Compact editor badges
 

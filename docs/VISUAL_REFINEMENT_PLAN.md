@@ -1,5 +1,15 @@
 # Visual refinement proposal
 
+Current status: the user approved all remaining previews in one batch, and the
+bounded trace-backed implementation is in place. See
+[implementation scope and validation](BATCH_IMPLEMENTATION.md).
+
+The user requested all remaining previews in one batch.
+See the [review gallery](previews/batch/index.html) and
+[family/example checklist](BATCH_REFINEMENT_REVIEW.md). Corrections and consolidated
+approval precede a combined implementation batch. The earlier per-slice sequence
+below records the work already completed.
+
 Status: direction approved. Grid/BFS implementation is ready for live review:
 matrix/queue layout, statement references, tuple identity, relevant/other locals,
 verified dequeued-state binding, observed queue/grid effects, fixed-loop frontier
@@ -60,6 +70,33 @@ numeric cell values. The preview's exact-step labels are fixture references; it
 only demonstrates event navigation, not actual line-by-line execution.
 
 ## Subsequent passes
+
+Pass 2 is approved and implemented locally: [tree + DFS plan](./DFS_REFINEMENT_PLAN.md).
+The [interactive preview](./previews/dfs-refinement.html) records the approved
+direction. The live implementation also includes expandable call-entry parameters
+for general recursion. The user rejected the path-focused backtracking concept.
+The next requested slice is now [recursion and DP](./RECURSION_DP_REFINEMENT_PLAN.md):
+[revised interactive preview](./previews/recursion-dp-refinement.html) with nested
+calls/returns, optional memo, and a separate bottom-up table. The approved first
+implementation is complete locally; its plan documents supported operations and
+fallbacks. This moves recursion/DP ahead of the original order below; traditional
+backtracking remains deferred.
+
+Approved and implemented: [array + two pointers](./TWO_POINTER_REFINEMENT_PLAN.md), with an
+[interactive sorted two-sum concept](./previews/two-pointer-refinement.html).
+The first pair-sum/comparison slice is live locally; its plan records supported
+operations and fallbacks. Sliding window remains the next separate preview.
+The [fixed sliding-window slice](./SLIDING_WINDOW_REFINEMENT_PLAN.md) is approved
+and implemented. The [variable-window slice](./VARIABLE_WINDOW_REFINEMENT_PLAN.md)
+is also approved and implemented:
+[interactive expand/shrink concept](./previews/variable-window-refinement.html),
+its plan records supported syntax and fallbacks.
+[Binary search](./BINARY_SEARCH_REFINEMENT_PLAN.md) is approved and implemented:
+inclusive candidate intervals, fresh midpoint, observed comparisons and bound moves.
+[Linked-list reversal](./LINKED_LIST_REFINEMENT_PLAN.md) is approved and implemented
+with stable nodes, directed next arrows, alias paths and change history.
+Next review: [slow / fast cycle detection](./SLOW_FAST_REFINEMENT_PLAN.md),
+[interactive preview](./previews/slow-fast-refinement.html).
 
 | Pass | Structures + algorithms | Refinement | Acceptance example |
 |---|---|---|---|

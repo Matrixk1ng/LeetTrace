@@ -1,4 +1,10 @@
+import BatchStructureViz from './BatchStructureViz';
+import TrieViz from './TrieViz';
+import LinkedListTraceViz from './LinkedListTraceViz';
+import BinarySearchViz from './BinarySearchViz';
 import HeapViz from './HeapViz';
+import TwoPointerViz from './TwoPointerViz';
+import SlidingWindowViz from './SlidingWindowViz';
 import TupleSequenceViz from './TupleSequenceViz';
 import GridFocusViz from './GridFocusViz';
 import { gridSearchStructures } from './gridSearch';
@@ -12,6 +18,7 @@ import QueueViz from './QueueViz';
 import SetViz from './SetViz';
 import StackViz from './StackViz';
 import TreeViz from './TreeViz';
+import TreeEventNavigation from './TreeEventNavigation';
 
 /**
  * Human labels for the card headers — `linked_list` shouldn't be what the user
@@ -31,12 +38,16 @@ const KIND_LABELS: Record<DataStructureState['type'], string> = {
   graph: 'graph',
 };
 
-export default function VizRouter() {
+export default function VizRouter({ excludedIds = [] }: { excludedIds?: string[] }) {
   const { currentSnapshot, previousSnapshot, dispatch, state } = useTrace();
 
   if (!currentSnapshot) return null;
   const { dataStructures, highlights } = currentSnapshot;
+  const hasLinkedList = dataStructures.some(ds => ds.type === 'linked_list');
   const combined = gridSearchStructures(currentSnapshot, state.detectedPattern?.type);
+  const pair = !combined && !dataStructures.some(ds => ds.traversal) ? currentSnapshot.visual?.pair : undefined;
+  const window = !combined && !dataStructures.some(ds => ds.traversal) ? currentSnapshot.visual?.window : undefined;
+  const binary = !combined && !dataStructures.some(ds => ds.traversal) ? currentSnapshot.visual?.binary : undefined;
   if (dataStructures.length === 0) return null;
 
   // Diffing against the step we came *from* is what makes stepping backwards
@@ -47,7 +58,11 @@ export default function VizRouter() {
 
   return (
     <div className="flex flex-col gap-3">
-      {dataStructures.filter(ds => ds !== combined?.grid && ds !== combined?.queue).map((ds) => {
+      {hasLinkedList && <LinkedListTraceViz />}
+      {binary && !excludedIds.includes(binary.structure) ? <BinarySearchViz observation={binary} /> : null}
+      {!binary && window && !excludedIds.includes(window.structure) ? <SlidingWindowViz observation={window} /> : null}
+      {!binary && !window && pair && !excludedIds.includes(pair.structure) ? <TwoPointerViz observation={pair} /> : null}
+      {dataStructures.filter(ds => (!hasLinkedList || ds.type !== 'linked_list') && ds !== combined?.grid && ds !== combined?.queue && ds.id !== (binary?.structure ?? window?.structure ?? pair?.structure) && !excludedIds.includes(ds.id)).map((ds) => {
         const candidate = previousById.get(ds.id);
         const previous = candidate?.type === ds.type ? candidate : null;
 
@@ -59,7 +74,7 @@ export default function VizRouter() {
             style={{ padding: 14 }}
           >
             <summary className="mb-2 cursor-pointer text-sm font-semibold text-trace-text-secondary">
-              {ds.displayName ?? ds.id} — {ds.tupleItems ? 'tuple sequence' : KIND_LABELS[ds.type] ?? ds.type}
+              {ds.displayName ?? ds.id} — {(ds.data as { __type?: string })?.__type === 'trie' ? 'trie' : ds.tupleItems ? 'tuple sequence' : KIND_LABELS[ds.type] ?? ds.type}
             </summary>
             {ds.treeContext && <p className="mb-2 text-xs text-trace-text-muted">Tree from {ds.treeContext} · kept visible during child calls</p>}
             <Viz onSelectStep={step => { dispatch({type: 'PAUSE'}); dispatch({type: 'SET_STEP', payload: step}); }} dataStructure={ds} previous={previous} highlights={highlights} />
@@ -82,6 +97,8 @@ function Viz({
   onSelectStep: (step: number) => void;
 }) {
   const { currentSnapshot } = useTrace();
+  if (dataStructure.type === 'graph' && (dataStructure.data as { __type?: string })?.__type === 'trie') return <TrieViz dataStructure={dataStructure} />;
+  if (['array', 'string', 'matrix', 'hashmap', 'set', 'stack', 'queue', 'heap'].includes(dataStructure.type)) return <BatchStructureViz dataStructure={dataStructure} previous={previous} />;
   if (dataStructure.tupleItems) return <TupleSequenceViz dataStructure={dataStructure}/>;
   switch (dataStructure.type) {
     // `string` renders as its characters — the builder only routes one here
@@ -113,7 +130,9 @@ function Viz({
       return <LinkedListViz dataStructure={dataStructure} />;
 
     case 'tree':
-      return <TreeViz onSelectStep={onSelectStep} dataStructure={dataStructure} previousDataStructure={previous} />;
+      return <><TreeViz onSelectStep={onSelectStep} dataStructure={dataStructure} previousDataStructure={previous}
+        frames={dataStructure.traversal && currentSnapshot?.dataStructures.find(d=>d.traversal)?.id===dataStructure.id ? currentSnapshot.callStack : undefined}
+        event={currentSnapshot?.event}/>{dataStructure.traversal && <TreeEventNavigation structureId={dataStructure.id}/>}</>;
 
     default:
       // Only `graph` reaches here now — the M8 stretch goal.

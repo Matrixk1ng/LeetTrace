@@ -102,7 +102,7 @@ export default function Controls({ requestTrace }: ControlsProps) {
   const isBusy = state.status === 'loading';
   const playbackDisabled = state.status === 'idle' || state.status === 'loading' || state.totalSteps === 0;
   const traceDisabled = state.status === 'loading' || state.status === 'running';
-  const compact = state.detectedPattern?.type === 'bfs';
+  const compact = !!state.snapshots[state.currentStep]?.visual?.operation || state.snapshots[state.currentStep]?.dataStructures.some(ds => ds.type === 'linked_list') || !!state.snapshots[state.currentStep]?.visual?.binary || !!state.snapshots[state.currentStep]?.visual?.window || state.detectedPattern?.type === 'bfs' || state.detectedPattern?.type === 'dfs' || state.detectedPattern?.type === 'dynamic_programming' || state.detectedPattern?.type === 'two_pointer' || state.detectedPattern?.type === 'sliding_window';
 
   const handleSpeedChange = (event: ChangeEvent<HTMLInputElement>) => {
     dispatch({ type: 'SET_SPEED', payload: MAX_SPEED + MIN_SPEED - Number(event.target.value) });

@@ -23,6 +23,7 @@ import { POINTER_COLORS } from '../shared/constants';
 
 /** One snapshot exactly as `tracer.py` emits it. */
 export interface RawSnapshot {
+  arguments?: Record<string, VariableState>;
   visual?: VisualReferences;
   step: number;
   line: number;
@@ -256,6 +257,7 @@ function treeNodeIds(root: TreeNodeData | null | undefined, out: string[] = []):
 }
 
 function nodeIdsOf(ds: DataStructureState): string[] {
+  if (ds.type === 'graph' && (ds.data as { __type?: string })?.__type === 'trie') return (ds.data as { nodes: {id:string}[] }).nodes.map(n=>n.id);
   if (ds.type === 'linked_list') {
     const ids = (ds.data as LinkedListData).nodeIds;
     return Array.isArray(ids) ? ids : [];
@@ -275,7 +277,7 @@ function nodeIdsOf(ds: DataStructureState): string[] {
 function collapseNodeAliases(dataStructures: DataStructureState[], context: TraceContext): DataStructureState[] {
   const kept: DataStructureState[] = [];
 
-  for (const kind of ['linked_list', 'tree'] as const) {
+  for (const kind of ['linked_list', 'tree', 'graph'] as const) {
     const group = dataStructures.filter((ds) => ds.type === kind);
     if (group.length === 0) continue;
 
@@ -306,7 +308,7 @@ function collapseNodeAliases(dataStructures: DataStructureState[], context: Trac
     }
   }
 
-  const collapsedKinds = new Set(['linked_list', 'tree']);
+  const collapsedKinds = new Set(['linked_list', 'tree', 'graph']);
   return dataStructures.filter((ds) => !collapsedKinds.has(ds.type) || kept.includes(ds));
 }
 
@@ -330,7 +332,8 @@ export function processSnapshots(raws: RawSnapshot[], context: TraceContext): Sn
 
     if (tracked) {
       if (raw.event === 'call') {
-        stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line });
+        stack.push({ frameId: raw.frameId, frameName: raw.frameName, line: raw.line,
+          ...(raw.arguments ? {arguments:raw.arguments} : {}) });
       } else {
         // Resync rather than assume: a budget can cut a trace mid-unwind, so
         // the frame this step belongs to may sit below the recorded top.
@@ -392,7 +395,7 @@ export function processSnapshot(raw: RawSnapshot, context: TraceContext): Snapsh
 }
 
 function group(dataStructures: DataStructureState[], context: TraceContext): DataStructureState[] {
-  const hasNodes = dataStructures.some((ds) => ds.type === 'linked_list' || ds.type === 'tree');
+  const hasNodes = dataStructures.some((ds) => ds.type === 'linked_list' || ds.type === 'tree' || ds.type === 'graph');
   return hasNodes ? collapseNodeAliases(dataStructures, context) : dataStructures;
 }
 
@@ -405,6 +408,8 @@ export function buildDataStructure(
 
   // 1. Structural tags the tracer attached — the value's own shape.
   switch (taggedType(value)) {
+    case 'trie':
+      return { id: name, type: 'graph', data: value, pointers: [] };
     case 'linked_list':
       return { id: name, type: 'linked_list', data: value, pointers: [] };
     case 'tree':

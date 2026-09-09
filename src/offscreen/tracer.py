@@ -27,9 +27,11 @@ TypeScript side adds ``dataStructures``/``highlights`` on top of this)::
 import ast
 import builtins
 import collections
+import functools
 import json
 import math
 import sys
+import types
 
 # --------------------------------------------------------------------------
 # Budgets
@@ -207,6 +209,12 @@ def _serialize(v, _depth=0):
             'frozen': isinstance(v, frozenset),
         }
 
+    # Ordinary TrieNode objects with a stored children dictionary. Read instance
+    # storage only; properties and custom accessors are not traversed.
+    trie = _serialize_trie(v)
+    if trie is not None:
+        return trie
+
     if (hasattr(v, 'val') and hasattr(v, 'next')
             and not hasattr(v, 'left') and not hasattr(v, 'right')):
         nodes = []
@@ -310,6 +318,771 @@ def _display_locals(frame):
 
 
 _visual_lines = {}
+_learning_lines = {}
+_learning_pending = {}
+_learning_containers = {}
+_learning_unknown = object()
+_pair_frames = {}
+_window_specs = {}
+_window_frames = {}
+_window_builtin_sum = builtins.sum
+_window_builtin_max = builtins.max
+_window_builtin_min = builtins.min
+_binary_specs = {}
+_binary_frames = {}
+_operation_pending = {}
+_operation_roles = {}
+
+
+def _serialize_trie(root):
+    def storage(node):
+        cls = type(node)
+        if type.__getattribute__(cls, '__getattribute__') is not object.__getattribute__:
+            return None
+        descriptor = next((type.__getattribute__(base, '__dict__')['__dict__'] for base in type.__getattribute__(cls, '__mro__')
+                           if '__dict__' in type.__getattribute__(base, '__dict__')), None)
+        if not isinstance(descriptor, types.GetSetDescriptorType):
+            return None
+        try:
+            state = vars(node)
+        except TypeError:
+            return None
+        if type(state) is dict and type(state.get('children')) is dict and all(type(k) is str for k in state['children']):
+            return state
+        return None
+    if storage(root) is None:
+        return None
+    nodes, edges, queue, seen = [], [], [(root, '')], set()
+    while queue and len(nodes) < 100:
+        node, character = queue.pop(0)
+        identity = str(id(node))
+        if identity in seen:
+            continue
+        state = storage(node)
+        if state is None:
+            continue
+        seen.add(identity)
+        ending = next((state[k] for k in ('is_word', 'is_end', 'isEnd', 'end', 'word_end') if type(state.get(k)) is bool), None)
+        nodes.append({'id': identity, 'character': character, 'terminal': ending})
+        for key, child in list(state['children'].items())[:100]:
+            if storage(child) is not None:
+                edges.append({'from': identity, 'to': str(id(child)), 'character': key})
+                queue.append((child, key))
+    return {'__type': 'trie', 'root': str(id(root)), 'nodes': nodes, 'edges': edges, 'truncated': bool(queue)}
+
+
+def _plain_value(value, depth=0):
+    """A bounded copy that never dispatches to user container methods."""
+    if depth > 5:
+        raise ValueError()
+    if type(value) in (int, float, bool, str, type(None)):
+        if type(value) is str and len(value) > 1000:
+            raise ValueError()
+        return _serialize(value)
+    if type(value) in (list, tuple, collections.deque, set):
+        if len(value) > 200:
+            raise ValueError()
+        return [_plain_value(v, depth + 1) for v in value]
+    if type(value) in (dict, collections.defaultdict, collections.Counter):
+        if len(value) > 200:
+            raise ValueError()
+        result = {}
+        for k, v in value.items():
+            if type(k) not in (int, float, bool, str, tuple):
+                raise ValueError()
+            key = str(k) if type(k) is not tuple else json.dumps(_plain_value(k))
+            result[key] = _plain_value(v, depth + 1)
+        return result
+    raise ValueError()
+
+
+def _operation_analyze(tree):
+    """Roles require source structure; variable spelling alone is not evidence."""
+    roles = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        found = {}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.While) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1:
+                test = node.test
+                if isinstance(test.left, ast.Name) and isinstance(test.comparators[0], ast.Name) and isinstance(test.ops[0], (ast.Lt, ast.LtE)):
+                    low, high = test.left.id, test.comparators[0].id
+                    mids = [n for n in ast.walk(node) if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+                            and isinstance(n.value, ast.BinOp) and isinstance(n.value.op, ast.FloorDiv)
+                            and {low, high}.issubset({v.id for v in ast.walk(n.value) if isinstance(v, ast.Name)})]
+                    if len(mids) == 1:
+                        found[low], found[high], found[mids[0].targets[0].id] = 'lower-bound', 'upper-bound', 'midpoint'
+                        if isinstance(test.ops[0], ast.Lt):
+                            assignments = sorted((a for a in ast.walk(fn) if isinstance(a, ast.Assign) and a.lineno < node.lineno), key=lambda a: a.lineno)
+                            for assignment in assignments:
+                                pairs = []
+                                for target in assignment.targets:
+                                    if isinstance(target, ast.Name):
+                                        pairs.append((target, assignment.value))
+                                    elif isinstance(target, ast.Tuple) and isinstance(assignment.value, ast.Tuple):
+                                        pairs.extend(zip(target.elts, assignment.value.elts))
+                                for target, value in pairs:
+                                    if isinstance(target, ast.Name) and target.id == high:
+                                        found[high] = 'exclusive-upper-bound' if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == 'len' else 'upper-bound'
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'sort' and isinstance(node.func.value, ast.Name):
+                found.setdefault(node.func.value.id, 'sorted-sequence')
+            if isinstance(node, ast.For) and isinstance(node.iter, ast.Subscript) and isinstance(node.iter.value, ast.Name):
+                # Iterating adjacency[node] establishes the outer/key relationship.
+                if isinstance(node.iter.slice, ast.Name):
+                    found.setdefault(node.iter.value.id, 'adjacency')
+                    candidates = {node.iter.slice.id}
+                    if isinstance(node.target, ast.Name):
+                        candidates.add(node.target.id)
+                    for check in ast.walk(fn):
+                        if isinstance(check, ast.Compare) and isinstance(check.left, ast.Name) and check.left.id in candidates and len(check.ops) == 1 and isinstance(check.ops[0], (ast.In, ast.NotIn)) and isinstance(check.comparators[0], ast.Name):
+                            found[check.comparators[0].id] = 'visited-set'
+            if isinstance(node, ast.For) and isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
+                first = node.target.elts[0]
+                if isinstance(first, ast.Name):
+                    for condition in ast.walk(node):
+                        if isinstance(condition, ast.Compare) and isinstance(condition.left, ast.Name) and condition.left.id == first.id:
+                            for rhs in condition.comparators:
+                                if isinstance(rhs, ast.Subscript) and isinstance(rhs.slice, ast.Constant) and rhs.slice.value == 1:
+                                    found[node.iter.id] = 'intervals'
+                                    base = rhs.value
+                                    while isinstance(base, ast.Subscript):
+                                        base = base.value
+                                    if isinstance(base, ast.Name):
+                                        found[base.id] = 'intervals'
+            if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+                right = node.target.id
+                for loop in ast.walk(node):
+                    if not isinstance(loop, ast.While):
+                        continue
+                    lefts = {a.target.id for a in ast.walk(loop) if isinstance(a, ast.AugAssign) and isinstance(a.target, ast.Name)
+                             and isinstance(a.op, ast.Add) and isinstance(a.value, ast.Constant) and a.value.value == 1}
+                    for left in lefts - {right}:
+                        indexed = {}
+                        for access in ast.walk(node):
+                            if isinstance(access, ast.Subscript) and isinstance(access.value, ast.Name) and isinstance(access.slice, ast.Name):
+                                indexed.setdefault(access.value.id, set()).add(access.slice.id)
+                        for name, indices in indexed.items():
+                            if {left, right}.issubset(indices):
+                                found[left], found[right], found[name] = 'window-start', 'window-end', 'window-values'
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                        name = target.value.id
+                        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == fn.name:
+                            found[name] = 'parents'
+            if isinstance(node, ast.While) and isinstance(node.test, ast.Compare):
+                test = node.test
+                if (isinstance(test.left, ast.Subscript) and isinstance(test.left.value, ast.Name)
+                        and len(test.comparators) == 1 and isinstance(test.comparators[0], ast.Name)
+                        and isinstance(test.left.slice, ast.Name) and test.left.slice.id == test.comparators[0].id):
+                    found[test.left.value.id] = 'parents'
+        roles[min([fn.lineno] + [d.lineno for d in fn.decorator_list])] = found
+    return roles
+
+
+def _operation_step(frame, event):
+    fid = id(frame)
+    local = frame.f_locals
+    def lookup(name):
+        return local.get(name, frame.f_globals.get(name))
+    def resolve(node):
+        if isinstance(node, ast.Name):
+            return lookup(node.id)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Tuple):
+            return tuple(resolve(n) for n in node.elts)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            value = resolve(node.operand)
+            if type(value) in (int, float):
+                return -value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
+            a, b = resolve(node.left), resolve(node.right)
+            if type(a) is int and type(b) is int:
+                return a + b if isinstance(node.op, ast.Add) else a - b
+        if isinstance(node, ast.Subscript):
+            value, key = resolve(node.value), resolve(node.slice)
+            if type(value) in (list, tuple, str) and type(key) is int:
+                return value[key]
+            if type(value) in (dict, collections.defaultdict, collections.Counter) and type(key) in (int, str, tuple):
+                # Check builtin keys before lookup to avoid custom hash/equality.
+                if all(type(k) in (int, str) or type(k) is tuple and all(type(x) in (int, str) for x in k) for k in value):
+                    if type(key) is tuple and not all(type(x) in (int, str) for x in key):
+                        raise ValueError()
+                    return dict.get(value, key)
+        raise ValueError()
+    def capture(names):
+        values = {}
+        for name in names:
+            if name not in local and name not in frame.f_globals:
+                continue
+            try:
+                values[name] = _plain_value(lookup(name))
+            except (ValueError, TypeError):
+                pass
+        return values
+    pending = _operation_pending.pop(fid, None)
+    result = {'roles': _operation_roles.get(frame.f_code.co_firstlineno, {})}
+    if 'exclusive-upper-bound' in result['roles'].values() and local.get('len', frame.f_globals.get('len', builtins.len)) is not builtins.len:
+        result['roles'] = {k: v for k, v in result['roles'].items() if v not in ('lower-bound', 'upper-bound', 'exclusive-upper-bound', 'midpoint')}
+    if pending:
+        node = pending.pop('_node')
+        caches = pending.pop('_caches')
+        pending['after'] = capture(pending['names'])
+        if isinstance(node, (ast.If, ast.While)) and event == 'line':
+            if any(n.lineno <= frame.f_lineno <= n.end_lineno for n in node.body):
+                pending['outcome'] = True
+            elif frame.f_lineno > node.end_lineno or any(n.lineno <= frame.f_lineno <= n.end_lineno for n in node.orelse):
+                pending['outcome'] = False
+        pending['cache'] = []
+        for name, wrapper, before in caches:
+            after = wrapper.cache_info()
+            if after.hits != before.hits or after.misses != before.misses:
+                pending['cache'].append({'name': name, 'hits': after.hits - before.hits, 'misses': after.misses - before.misses})
+        result['completed'] = pending
+    stmt = _learning_lines.get(frame.f_lineno) if event == 'line' else None
+    if stmt is None or isinstance(stmt, (ast.FunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)):
+        return result if pending or result['roles'] else None
+    expr = stmt.test if isinstance(stmt, (ast.If, ast.While)) else stmt.iter if isinstance(stmt, ast.For) else stmt
+    names = sorted({n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and n.id not in ('self', 'cls')})[:20]
+    source = ((type(stmt).__name__.lower() + ' ' + ast.unparse(expr)) if expr is not stmt else ast.unparse(stmt))[:500]
+    if isinstance(stmt, ast.For):
+        source = ('for ' + ast.unparse(stmt.target) + ' in ' + ast.unparse(stmt.iter))[:500]
+    operands = []
+    accesses = []
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.In, ast.NotIn)) and isinstance(node.comparators[0], ast.Name):
+            try:
+                accesses.append({'name': node.comparators[0].id, 'indices': [_plain_value(resolve(node.left))], 'write': False, 'membership': True})
+            except (ValueError, TypeError, IndexError, KeyError):
+                pass
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.attr == 'get' and node.args:
+            try:
+                accesses.append({'name': node.func.value.id, 'indices': [_plain_value(resolve(node.args[0]))], 'write': False})
+            except (ValueError, TypeError, IndexError, KeyError):
+                pass
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            try:
+                operands.append({'expression': ast.unparse(node), 'value': _plain_value(resolve(node))})
+            except (ValueError, TypeError, IndexError, KeyError):
+                pass
+        if isinstance(node, ast.Subscript):
+            base, indices = node, []
+            try:
+                while isinstance(base, ast.Subscript):
+                    indices.insert(0, _plain_value(resolve(base.slice)))
+                    base = base.value
+                if isinstance(base, ast.Name):
+                    accesses.append({'name': base.id, 'indices': indices, 'write': isinstance(node.ctx, ast.Store)})
+            except (ValueError, TypeError, IndexError, KeyError):
+                pass
+    caches = []
+    for name in names:
+        wrapper = lookup(name)
+        if type(wrapper) is functools._lru_cache_wrapper:
+            caches.append((name, wrapper, wrapper.cache_info()))
+    observation = {'line': frame.f_lineno, 'source': source, 'kind': type(stmt).__name__, 'names': names,
+                   'before': capture(names), 'operands': operands[:20], 'accesses': accesses[:20]}
+    result['upcoming'] = observation
+    _operation_pending[fid] = dict(observation, _node=stmt, _caches=caches)
+    return result
+
+
+def _analyze_binary_specs(tree):
+    result = {}
+    for loop in ast.walk(tree):
+        if not isinstance(loop, ast.While):
+            continue
+        test = loop.test
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.LtE)
+                and isinstance(test.left, ast.Name) and isinstance(test.comparators[0], ast.Name)):
+            continue
+        low, high = test.left.id, test.comparators[0].id
+        if low == high:
+            continue
+        direct = ast.parse(f'({low} + {high}) // 2', mode='eval').body
+        offset = ast.parse(f'{low} + ({high} - {low}) // 2', mode='eval').body
+        mids = [n for n in ast.walk(loop) if isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name) and ast.dump(n.value) in (ast.dump(direct), ast.dump(offset))]
+        if len(mids) != 1 or mids[0].targets[0].id in (low, high):
+            continue
+        mid = mids[0].targets[0].id
+        arrays = {n.value.id for n in ast.walk(loop) if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
+                  and isinstance(n.slice, ast.Name) and n.slice.id == mid}
+        if len(arrays) != 1:
+            continue
+        spec = {'low': low, 'high': high, 'mid': mid, 'structure': arrays.pop(), 'mid_stmt': mids[0]}
+        # Only this loop's source interval is classified; its subsequent return is
+        # handled by the live frame state. Nested ambiguous loops abstain.
+        for line in range(loop.lineno, loop.end_lineno + 1):
+            result[line] = None if line in result else spec
+    return result
+
+
+def _binary_step(frame, event):
+    fid = id(frame)
+    state = _binary_frames.get(fid)
+    spec = state['spec'] if state else _binary_specs.get(frame.f_lineno)
+    if not spec:
+        return None
+    local = frame.f_locals
+    def integer(v):
+        return type(v) is int and abs(v) <= 2**53 - 1
+    data, low, high = local.get(spec['structure']), local.get(spec['low']), local.get(spec['high'])
+    if (type(data) is not list or len(data) > 2000 or not all(integer(v) for v in data)
+        or not integer(low) or not integer(high) or not 0 <= low <= len(data) or not -1 <= high < len(data)):
+        _binary_frames.pop(fid, None)
+        return None
+    if not state:
+        if event != 'line' or any(data[i-1] > data[i] for i in range(1, len(data))):
+            return None
+        _learning_containers[id(data)] = data
+        state = {'spec': spec, 'container': data, 'original': list(data), 'bounds': [low, high], 'fresh': False}
+        _binary_frames[fid] = state
+        kind = 'bounds'
+    else:
+        if data is not state['container'] or data != state['original']:
+            _binary_frames.pop(fid, None)
+            return None
+        kind = 'state'
+    previous = state['bounds']
+    if previous != [low, high]:
+        kind = 'move'
+        state['fresh'] = False
+    state['bounds'] = [low, high]
+    pending = state.pop('pending_mid', None)
+    if pending:
+        actual = local.get(spec['mid'])
+        if event == 'line' and integer(actual) and [low, high] == pending['bounds'] and actual == pending['expected'] and low <= actual <= high:
+            state.update(mid=actual, fresh=True)
+            kind = 'midpoint'
+        else:
+            state['fresh'] = False
+    comparison = None
+    branch = state.pop('branch', None)
+    if branch and event == 'line':
+        node, captured = branch
+        if any(n.lineno <= frame.f_lineno <= n.end_lineno for n in node.body):
+            comparison = dict(captured, outcome=True)
+        elif any(n.lineno <= frame.f_lineno <= n.end_lineno for n in node.orelse) or frame.f_lineno > node.end_lineno:
+            comparison = dict(captured, outcome=False)
+        if comparison:
+            state['last'] = comparison
+            kind = 'compare'
+    stmt = _learning_lines.get(frame.f_lineno) if event == 'line' else None
+    if stmt is spec['mid_stmt']:
+        state['fresh'] = False
+        if low <= high:
+            state['pending_mid'] = {'bounds': [low, high], 'expected': (low + high) // 2}
+    if state.get('fresh') and (not integer(local.get(spec['mid'])) or local.get(spec['mid']) != state.get('mid')):
+        state['fresh'] = False
+    if isinstance(stmt, ast.If) and state.get('fresh'):
+        test = stmt.test
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.left, ast.Subscript) and isinstance(test.left.value, ast.Name) and test.left.value.id == spec['structure'] and isinstance(test.left.slice, ast.Name) and test.left.slice.id == spec['mid']:
+            rhs = test.comparators[0]
+            target = local.get(rhs.id) if isinstance(rhs, ast.Name) else rhs.value if isinstance(rhs, ast.Constant) else None
+            operator = {ast.Eq: '==', ast.Lt: '<', ast.Gt: '>', ast.LtE: '<=', ast.GtE: '>='}.get(type(test.ops[0]))
+            if operator and integer(target):
+                state['branch'] = (stmt, {'mid': state['mid'], 'value': data[state['mid']], 'target': target, 'operator': operator, 'bounds': [low, high]})
+    info = {'kind': kind, 'structure': spec['structure'], 'identity': str(id(data)), 'lowName': spec['low'], 'highName': spec['high'], 'midName': spec['mid'],
+            'low': low, 'high': high, 'midCurrent': state['fresh'], 'previous': previous}
+    if 'mid' in state:
+        info['mid'] = state['mid']
+    if comparison:
+        info['comparison'] = comparison
+    if 'last' in state:
+        info['lastComparison'] = state['last']
+    if event == 'return':
+        _binary_frames.pop(fid, None)
+    return info
+
+
+def _analyze_window_specs(tree):
+    result = {}
+    def statements(body):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            yield node
+            for field in ('body', 'orelse', 'finalbody'):
+                yield from statements(getattr(node, field, []))
+            for handler in getattr(node, 'handlers', []):
+                yield from statements(handler.body)
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        nodes = list(statements(fn.body))
+        updates = [n for n in nodes if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name)
+                   and isinstance(n.op, (ast.Add, ast.Sub)) and isinstance(n.value, ast.Subscript)
+                   and isinstance(n.value.value, ast.Name)]
+        candidates = []
+        for aggregate, structure in {(n.target.id, n.value.value.id) for n in updates}:
+            group = [n for n in updates if n.target.id == aggregate and n.value.value.id == structure]
+            adds = [n for n in group if isinstance(n.op, ast.Add)]
+            removes = [n for n in group if isinstance(n.op, ast.Sub)]
+            if not adds or not removes:
+                continue
+            widths = []
+            for remove in removes:
+                index = remove.value.slice
+                if isinstance(index, ast.BinOp) and isinstance(index.op, ast.Sub) and isinstance(index.left, ast.Name):
+                    if any(isinstance(n.value.slice, ast.Name) and n.value.slice.id == index.left.id for n in adds):
+                        widths.append(index.right)
+                elif isinstance(index, ast.Name):
+                    for node in nodes:
+                        test = getattr(node, 'test', None)
+                        if not isinstance(test, ast.Compare) or len(test.ops) != 1 or not isinstance(test.ops[0], (ast.Eq, ast.GtE)):
+                            continue
+                        size = test.left
+                        if (isinstance(size, ast.BinOp) and isinstance(size.op, ast.Add) and isinstance(size.right, ast.Constant) and size.right.value == 1
+                            and isinstance(size.left, ast.BinOp) and isinstance(size.left.op, ast.Sub)
+                            and isinstance(size.left.left, ast.Name) and isinstance(size.left.right, ast.Name)
+                            and size.left.right.id == index.id and any(isinstance(n.value.slice, ast.Name) and n.value.slice.id == size.left.left.id for n in adds)):
+                            widths.append(test.comparators[0])
+            widths = [w for w in widths if isinstance(w, ast.Name) or isinstance(w, ast.Constant) and type(w.value) is int]
+            if widths and len({ast.dump(w) for w in widths}) == 1:
+                candidates.append({'aggregate': aggregate, 'structure': structure, 'width': widths[0]})
+            elif not widths and len(adds) == len(removes) == 1 and isinstance(adds[0].value.slice, ast.Name) and isinstance(removes[0].value.slice, ast.Name):
+                for node in nodes:
+                    test = getattr(node, 'test', None)
+                    if (isinstance(node, ast.While) and isinstance(test, ast.Compare) and len(test.ops) == 1
+                        and isinstance(test.ops[0], ast.GtE) and isinstance(test.left, ast.Name) and test.left.id == aggregate
+                        and (isinstance(test.comparators[0], ast.Name) or isinstance(test.comparators[0], ast.Constant) and type(test.comparators[0].value) is int)
+                        and removes[0] in list(statements(node.body))):
+                        candidates.append({'aggregate': aggregate, 'structure': structure, 'mode': 'variable',
+                                           'target': test.comparators[0], 'loop': node,
+                                           'left': removes[0].value.slice.id, 'right': adds[0].value.slice.id})
+        if len(candidates) == 1:
+            for n in nodes:
+                if n.lineno in _learning_lines:
+                    result[n.lineno] = candidates[0]
+    return result
+
+
+def _window_step(frame, event):
+    """Track membership from confirmed add/remove effects, not pointer positions."""
+    fid = id(frame)
+    stmt = _learning_lines.get(frame.f_lineno) if event == 'line' else None
+    spec = _window_specs.get(frame.f_lineno)
+    state = _window_frames.get(fid)
+    local = frame.f_locals
+    def integer(v):
+        return type(v) is int and abs(v) <= 2**53 - 1
+    def scalar(node):
+        if isinstance(node, ast.Name):
+            value = local.get(node.id)
+        elif isinstance(node, ast.Constant):
+            value = node.value
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
+            a, b = scalar(node.left), scalar(node.right)
+            value = a + b if isinstance(node.op, ast.Add) else a - b
+        else:
+            raise ValueError()
+        if not integer(value):
+            raise ValueError()
+        return value
+    try:
+        if not state and spec:
+            data = local.get(spec['structure'])
+            variable = spec.get('mode') == 'variable'
+            width = 0 if variable else scalar(spec['width'])
+            target = scalar(spec['target']) if variable else None
+            if (type(data) is not list or not 0 < len(data) <= 2000 or not all(integer(v) for v in data)
+                or (variable and (target <= 0 or any(v <= 0 for v in data))) or (not variable and not 0 < width <= len(data))):
+                return None
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id == spec['aggregate']:
+                members = []
+                value = stmt.value
+                if isinstance(value, ast.Constant) and type(value.value) is int and value.value == 0:
+                    pass
+                elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == 'sum' and not value.keywords and len(value.args) == 1 and local.get('sum', frame.f_globals.get('sum', builtins.sum)) is _window_builtin_sum:
+                    arg = value.args[0]
+                    if not isinstance(arg, ast.Subscript) or not isinstance(arg.value, ast.Name) or arg.value.id != spec['structure'] or not isinstance(arg.slice, ast.Slice) or arg.slice.step is not None:
+                        return None
+                    lo = scalar(arg.slice.lower) if arg.slice.lower else 0
+                    hi = scalar(arg.slice.upper) if arg.slice.upper else len(data)
+                    if not 0 <= lo <= hi <= len(data):
+                        return None
+                    members = list(range(lo, hi))
+                else:
+                    return None
+                _learning_containers[id(data)] = data
+                state = {'spec': spec, 'container': data, 'original': list(data), 'width': width, 'target': target, 'members': [], 'total': 0,
+                         'pending': {'kind': 'init', 'members': members, 'expected': _window_builtin_sum(data[i] for i in members)}}
+                _window_frames[fid] = state
+                return None
+        if not state:
+            return None
+        spec = state['spec']
+        variable = spec.get('mode') == 'variable'
+        data = local.get(spec['structure'])
+        total = local.get(spec['aggregate'])
+        if (data is not state['container'] or type(data) is not list or len(data) != len(state['original'])
+            or not all(integer(v) for v in data) or data != state['original'] or not integer(total)
+            or (not variable and scalar(spec['width']) != state['width'])
+            or (variable and scalar(spec['target']) != state['target'])):
+            _window_frames.pop(fid, None)
+            return None
+        info = {'kind': 'state'}
+        pending = state.pop('pending', None)
+        if pending:
+            if event not in ('line', 'return'):
+                _window_frames.pop(fid, None)
+                return None
+            if pending['kind'] in ('check', 'save', 'min-check'):
+                actual = local.get(pending['name'])
+                if not integer(actual) or actual != pending['expected']:
+                    _window_frames.pop(fid, None)
+                    return None
+                info = {'kind': 'check'}
+                prior = state.get('best')
+                improved = (actual == len(state['members']) and actual < pending['before']) if pending['kind'] == 'min-check' else (actual == total and (prior is None and pending['before'] < actual or prior is not None and actual > prior['value']))
+                if improved:
+                    state['best'] = {'name': pending['name'], 'value': actual, 'indices': list(state['members'])}
+                    info['kind'] = 'save'
+            elif total == pending['expected']:
+                state['members'] = pending['members']
+                info = {k: v for k, v in pending.items() if k not in ('members', 'expected')}
+                state['total'] = total
+                state.pop('condition', None)
+            else:
+                _window_frames.pop(fid, None)
+                return None
+        if total != state['total']:
+            _window_frames.pop(fid, None)
+            return None
+        members = state['members']
+        branch = state.pop('branch', None)
+        if branch and event == 'line':
+            state['condition'] = dict(branch, outcome=any(n.lineno <= frame.f_lineno <= n.end_lineno for n in spec['loop'].body))
+            info['kind'] = 'condition'
+        if variable and stmt is spec['loop']:
+            state['condition'] = {'total': total, 'target': state['target']}
+            state['branch'] = state['condition']
+        info.update(structure=spec['structure'], identity=str(id(data)), aggregate=spec['aggregate'], width=state['width'], indices=list(members), total=total)
+        if variable:
+            info.update(mode='variable', condition=state.get('condition', {'total': total, 'target': state['target']}))
+        if 'best' in state:
+            info['best'] = state['best']
+        if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name) and stmt.target.id == spec['aggregate'] and isinstance(stmt.op, (ast.Add, ast.Sub)) and isinstance(stmt.value, ast.Subscript) and isinstance(stmt.value.value, ast.Name) and stmt.value.value.id == spec['structure']:
+            index = scalar(stmt.value.slice)
+            add = isinstance(stmt.op, ast.Add)
+            if not 0 <= index < len(data) or (index in members) == add:
+                _window_frames.pop(fid, None)
+                return info
+            after = sorted(members + [index]) if add else [i for i in members if i != index]
+            if after and after != list(range(after[0], after[-1] + 1)):
+                _window_frames.pop(fid, None)
+                return info
+            state['pending'] = {'kind': 'add' if add else 'remove', 'members': after, 'expected': total + data[index] if add else total - data[index], 'before': total, 'index': index, 'value': data[index]}
+        elif variable and isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name) and members and state.get('condition', {}).get('outcome') is True:
+            name, value = stmt.targets[0].id, stmt.value
+            before = local.get(name)
+            if not (integer(before) or type(before) is float and before == float('inf')):
+                return info
+            length = value
+            is_min = isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == 'min' and local.get('min', frame.f_globals.get('min', builtins.min)) is _window_builtin_min and len(value.args) == 2 and not value.keywords
+            if not is_min or name in (spec['aggregate'], spec['left'], spec['right']):
+                return info
+            if is_min:
+                lengths = [arg for arg in value.args if not (isinstance(arg, ast.Name) and arg.id == name)]
+                if len(lengths) != 1:
+                    return info
+                length = lengths[0]
+            if (isinstance(length, ast.BinOp) and isinstance(length.op, ast.Add) and isinstance(length.right, ast.Constant) and type(length.right.value) is int and length.right.value == 1
+                and isinstance(length.left, ast.BinOp) and isinstance(length.left.op, ast.Sub)
+                and isinstance(length.left.left, ast.Name) and length.left.left.id == spec['right']
+                and isinstance(length.left.right, ast.Name) and length.left.right.id == spec['left']
+                and scalar(length) == len(members) and local.get(spec['left']) == members[0] and local.get(spec['right']) == members[-1]):
+                state['pending'] = {'kind': 'min-check', 'name': name, 'before': before, 'expected': before if is_min and before < len(members) else len(members)}
+        elif not variable and isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name) and len(members) == state['width']:
+            name, value = stmt.targets[0].id, stmt.value
+            before = local.get(name)
+            valid_before = integer(before) or type(before) is float and before == float('-inf')
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == 'max' and local.get('max', frame.f_globals.get('max', builtins.max)) is _window_builtin_max and not value.keywords and len(value.args) == 2 and all(isinstance(a, ast.Name) for a in value.args) and {a.id for a in value.args} == {name, spec['aggregate']} and valid_before:
+                state['pending'] = {'kind': 'check', 'name': name, 'before': before, 'expected': before if before >= total else total}
+        if event == 'return':
+            _window_frames.pop(fid, None)
+        return info
+    except (ValueError, TypeError, IndexError):
+        _window_frames.pop(fid, None)
+        return None
+
+
+def _pair_step(frame, event):
+    """Observe simple builtin-int pair sums and branch entry, without eval."""
+    fid = id(frame)
+    state = _pair_frames.get(fid)
+    stmt = _learning_lines.get(frame.f_lineno) if event == 'line' else None
+    local = frame.f_locals
+    def integer(value):
+        return type(value) is int and abs(value) <= 2**53 - 1
+    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+        expr = stmt.value
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            refs = [expr.left, expr.right]
+            if all(isinstance(r, ast.Subscript) and isinstance(r.value, ast.Name) and isinstance(r.slice, ast.Name) for r in refs):
+                names = [r.slice.id for r in refs]
+                name = refs[0].value.id
+                data = local.get(name)
+                indices = [local.get(n) for n in names]
+                if refs[1].value.id == name and len(set(names)) == 2 and stmt.targets[0].id not in names and type(data) is list and len(data) <= 2000 and all(integer(v) for v in data) and all(integer(i) and 0 <= i < len(data) for i in indices):
+                    _learning_containers[id(data)] = data
+                    state = {'container': data, 'structure': name, 'names': names, 'sumName': stmt.targets[0].id,
+                             'pendingSum': {'indices': indices, 'values': [data[i] for i in indices], 'line': frame.f_lineno},
+                             'indices': indices}
+                    _pair_frames[fid] = state
+                    return {'structure': name, 'identity': str(id(data)), 'names': names, 'indices': indices, 'kind': 'read', 'values': [data[i] for i in indices]}
+    if not state:
+        return None
+    data = local.get(state['structure'])
+    indices = [local.get(n) for n in state['names']]
+    if data is not state['container'] or type(data) is not list or len(data) > 2000 or not all(integer(v) for v in data) or not all(integer(i) for i in indices):
+        _pair_frames.pop(fid, None)
+        return None
+    info = {'structure': state['structure'], 'identity': str(id(data)), 'names': state['names'], 'indices': indices, 'kind': 'state'}
+    if indices != state['indices']:
+        info.update(kind='move', previous=state['indices'])
+    state['indices'] = indices
+    pending = state.pop('pendingSum', None)
+    if pending and event == 'line':
+        value = local.get(state['sumName'])
+        if integer(value) and value == sum(pending['values']):
+            state['sum'] = dict(pending, sum=value)
+            info.update(kind='sum', pair=state['sum'])
+    branch = state.pop('branch', None)
+    if branch and event == 'line':
+        node, comparison = branch
+        if any(child.lineno <= frame.f_lineno <= child.end_lineno for child in node.body):
+            info.update(kind='compare', comparison=dict(comparison, outcome=True))
+        elif any(child.lineno <= frame.f_lineno <= child.end_lineno for child in node.orelse) or frame.f_lineno > node.end_lineno:
+            info.update(kind='compare', comparison=dict(comparison, outcome=False))
+    pair = state.get('sum')
+    if pair:
+        info['pair'] = pair
+    if isinstance(stmt, ast.If) and pair and pair['indices'] == indices and all(0 <= i < len(data) for i in indices) and [data[i] for i in indices] == pair['values']:
+        test = stmt.test
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.left, ast.Name) and test.left.id == state['sumName'] and len(test.comparators) == 1:
+            rhs = test.comparators[0]
+            target = local.get(rhs.id) if isinstance(rhs, ast.Name) else rhs.value if isinstance(rhs, ast.Constant) else None
+            operator = {ast.Eq: '==', ast.Lt: '<', ast.Gt: '>', ast.LtE: '<=', ast.GtE: '>='}.get(type(test.ops[0]))
+            if operator and integer(target) and integer(local.get(state['sumName'])) and local.get(state['sumName']) == pair['sum']:
+                state['branch'] = (stmt, {'sum': pair['sum'], 'target': target, 'operator': operator, 'indices': indices, 'values': pair['values']})
+    if event == 'return':
+        _pair_frames.pop(fid, None)
+    return info
+
+
+def _analyze_learning_lines(tree):
+    """Keep AST nodes internal; only unambiguous single statements are eligible."""
+    lines = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            lines.setdefault(node.lineno, []).append(node)
+    return {line: nodes[0] for line, nodes in lines.items() if len(nodes) == 1}
+
+
+def _learning_step(frame, event, arg):
+    """Observe builtin containers only. Never eval expressions or call user methods."""
+    emitted = []
+    fid = id(frame)
+    pending = _learning_pending.pop(fid, None)
+    def lookup(name):
+        return frame.f_locals.get(name, frame.f_globals.get(name))
+    def safe_key(key):
+        return type(key) in (int, str) or type(key) is tuple and all(type(x) in (int, str) for x in key)
+    def scalar(node):
+        if isinstance(node, ast.Tuple):
+            value = tuple(scalar(x) for x in node.elts)
+        elif isinstance(node, ast.Constant):
+            value = node.value
+        elif isinstance(node, ast.Name):
+            value = lookup(node.id)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
+            a, b = scalar(node.left), scalar(node.right)
+            if type(a) is not int or type(b) is not int:
+                raise ValueError()
+            value = a + b if isinstance(node.op, ast.Add) else a - b
+        else:
+            raise ValueError()
+        if (type(value) not in (int, str, bool, type(None)) and not safe_key(value)) or type(value) is int and abs(value) > 2**53 - 1:
+            raise ValueError()
+        return value
+    def ref(node):
+        if not isinstance(node, ast.Subscript) or not isinstance(node.value, ast.Name):
+            raise ValueError()
+        name = node.value.id
+        container = lookup(name)
+        if type(container) not in (dict, list):
+            raise ValueError()
+        if len(container) > 2000:
+            raise ValueError()
+        if type(container) is dict and any(not safe_key(k) for k in container):
+            raise ValueError()
+        # Keep observed containers alive for this trace so object ids cannot recycle.
+        _learning_containers[id(container)] = container
+        key = scalar(node.slice)
+        if type(container) is list:
+            if type(key) is not int or not -len(container) <= key < len(container):
+                raise ValueError()
+            key %= len(container)
+        elif not safe_key(key):
+            raise ValueError()
+        return name, container, key
+    if pending:
+        info, container, expected = pending
+        if lookup(info['structure']) is container and (type(container) is not dict or all(safe_key(k) for k in container)):
+            if info['kind'] == 'stored-return':
+                if event == 'return' and type(arg) is type(expected) and arg == expected:
+                    emitted.append(info)
+            elif event in ('line', 'return'):
+                actual = container.get(info['key']) if type(container) is dict else container[info['key']]
+                if expected is _learning_unknown:
+                    if event == 'line' and info['key'] in container and type(actual) in (int, str, bool, type(None)):
+                        emitted.append(dict(info, value=_serialize(actual)))
+                    actual = _learning_unknown
+                if type(actual) is type(expected) and actual == expected:
+                    if expected is not _learning_unknown and (info['kind'] != 'table-write' or all(
+                            type(v) is type(info['before'][i]) and v == info['before'][i]
+                            for i, v in enumerate(container) if i != info['key'])):
+                        emitted.append({k: v for k, v in info.items() if k != 'before'})
+    if event != 'line':
+        return emitted
+    stmt = _learning_lines.get(frame.f_lineno)
+    try:
+        if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Subscript):
+            name, container, key = ref(stmt.value)
+            if type(container) is not dict or key not in container:
+                return emitted
+            value = container[key]
+            if type(value) not in (int, str, bool, type(None)):
+                return emitted
+            info = {'kind': 'stored-return', 'structure': name, 'identity': str(id(container)), 'key': key, 'value': value}
+            _learning_pending[fid] = (info, container, value)
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Subscript):
+            name, container, key = ref(stmt.targets[0])
+            info = {'structure': name, 'identity': str(id(container)), 'key': key}
+            if type(container) is dict:
+                # Wait for the next line in THIS frame, after child calls finish.
+                # Exception events cancel this pending assignment.
+                info.update(kind='memo-write')
+                _learning_pending[fid] = (info, container, _learning_unknown)
+            elif isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add) and len(container) <= 2000:
+                left, right = ref(stmt.value.left), ref(stmt.value.right)
+                if left[1] is not container or right[1] is not container:
+                    return emitted
+                if any(type(v) not in (int, type(None)) or type(v) is int and abs(v) > 2**53 - 1 for v in container):
+                    return emitted
+                a, b = container[left[2]], container[right[2]]
+                if type(a) is not int or type(b) is not int or abs(a + b) > 2**53 - 1:
+                    return emitted
+                info.update(kind='table-read', reads=[left[2], right[2]], operands=[a, b], value=a+b)
+                emitted.append(dict(info))
+                _learning_pending[fid] = (dict(info, kind='table-write', before=list(container)), container, a+b)
+    except (ValueError, KeyError, IndexError, TypeError):
+        pass
+    return emitted
 
 
 def _analyze_visual_lines(tree):
@@ -695,6 +1468,11 @@ def _tracer(frame, event, arg):
         return _tracer
 
     if event == 'exception':
+        _operation_pending.pop(id(frame), None)
+        _binary_frames.pop(id(frame), None)
+        _window_frames.pop(id(frame), None)
+        _learning_pending.pop(id(frame), None)
+        _pair_frames.pop(id(frame), None)
         return _tracer
 
     if event not in ('line', 'call', 'return'):
@@ -750,7 +1528,36 @@ def _tracer(frame, event, arg):
         'callDepth': info['depth'],
         'variables': current_locals,
     }
+    if event == 'call' and not is_module_frame:
+        code = frame.f_code
+        count = code.co_argcount + code.co_kwonlyargcount
+        count += bool(code.co_flags & 0x04) + bool(code.co_flags & 0x08)
+        snapshot['arguments'] = {}
+        for name in code.co_varnames[:count]:
+            if name in ('self', 'cls') or name not in frame.f_locals:
+                continue
+            value = frame.f_locals[name]
+            try:
+                serialized = _serialize(value)
+            except Exception:
+                serialized = '<value unavailable>'
+            snapshot['arguments'][name] = {'value': serialized, 'type': type(value).__name__, 'changed': False}
     snapshot['visual'] = _visual_lines.get(frame.f_lineno, {'names': [], 'cells': []}) if event == 'line' else {'names': [], 'cells': []}
+    learning = _learning_step(frame, event, arg)
+    if learning:
+        snapshot['visual'] = dict(snapshot['visual'], learning=[dict(e, key=str(e['key']), keyType='tuple') if type(e.get('key')) is tuple else e for e in learning])
+    pair = _pair_step(frame, event)
+    if pair:
+        snapshot['visual'] = dict(snapshot['visual'], pair=pair)
+    window = _window_step(frame, event)
+    if window:
+        snapshot['visual'] = dict(snapshot['visual'], window=window)
+    binary = _binary_step(frame, event)
+    if binary:
+        snapshot['visual'] = dict(snapshot['visual'], binary=binary)
+    operation = _operation_step(frame, event)
+    if operation:
+        snapshot['visual'] = dict(snapshot['visual'], operation=operation)
     if snapshot['visual'].get('levelLoop') and any(
             frame.f_locals.get(name, frame.f_globals.get(name, builtin)) is not builtin
             for name, builtin in [('range', builtins.range), ('len', builtins.len)]):
@@ -1161,6 +1968,12 @@ def _reset_state():
     global _snapshots, _prev_locals, _events, _truncated, _limit_kind
     global _frames, _frame_seq, _stdout
     _snapshots = []
+    _learning_pending.clear()
+    _learning_containers.clear()
+    _pair_frames.clear()
+    _window_frames.clear()
+    _binary_frames.clear()
+    _operation_pending.clear()
     _prev_locals = {}
     _events = 0
     _truncated = False
@@ -1359,7 +2172,7 @@ def _detect_pattern(tree):
 
 
 def run_traced(code_string, examples=None):
-    global _user_max_line, _usage, _visual_lines
+    global _user_max_line, _usage, _visual_lines, _learning_lines, _window_specs, _binary_specs, _operation_roles
 
     _user_max_line = code_string.count('\n') + 1
 
@@ -1385,8 +2198,12 @@ def run_traced(code_string, examples=None):
     except SyntaxError:
         tree = None
 
+    _operation_roles = _operation_analyze(tree) if tree is not None else {}
     _usage = _analyze_usage(tree) if tree is not None else {}
     _visual_lines = _analyze_visual_lines(tree) if tree is not None else {}
+    _learning_lines = _analyze_learning_lines(tree) if tree is not None else {}
+    _window_specs = _analyze_window_specs(tree) if tree is not None else {}
+    _binary_specs = _analyze_binary_specs(tree) if tree is not None else {}
     indexing = _analyze_indexing(tree) if tree is not None else {}
 
     namespace = _build_namespace()

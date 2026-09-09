@@ -1,4 +1,8 @@
+import OperationDetails from './components/OperationDetails';
 import FeedbackFooter from './components/FeedbackFooter';
+import { useMemo } from 'react';
+import RecursionDPViz from './components/visualizers/RecursionDPViz';
+import { learningModel } from './components/visualizers/learningModel';
 import GridSearchViz from './components/visualizers/GridSearchViz';
 import { gridSearchStructures } from './components/visualizers/gridSearch';
 import StepDetails from './components/StepDetails';
@@ -24,6 +28,9 @@ function App() {
   const { requestTrace } = useExecution();
 
   const hasTreeTraversal = currentSnapshot?.dataStructures.some(ds => ds.traversal);
+  const learning = useMemo(() => learningModel(state.snapshots, state.currentStep), [state.snapshots, state.currentStep]);
+  const hasLearning = !hasTreeTraversal && !hasGridSearch && (learning.recursive || !!learning.table);
+  const hasPair = !hasLearning && !hasTreeTraversal && !hasGridSearch && !!(currentSnapshot?.visual?.operation || currentSnapshot?.dataStructures.some(ds => ds.type === 'linked_list') || currentSnapshot?.visual?.binary || currentSnapshot?.visual?.pair || currentSnapshot?.visual?.window);
   const isIdle = state.status === 'idle';
   const isLoading = state.status === 'loading';
   const isEmptyCompleted = state.status === 'completed' && state.totalSteps === 0;
@@ -61,7 +68,7 @@ function App() {
         {state.truncated ? <p role="status" className="mb-3 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-200">
           Trace stopped at the {state.limit === 'time' ? 'time' : state.limit === 'events' ? 'execution-event' : 'snapshot'} limit. Showing {state.totalSteps} recorded steps; the solution may not have finished.
         </p> : null}
-        <section className={hasGridSearch ? "flex flex-col" : "flex min-h-[360px] flex-col justify-center rounded-[24px] border border-trace-border bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_34%),linear-gradient(180deg,rgba(30,42,74,0.7),rgba(26,26,46,0.96))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"}>
+        <section className={hasGridSearch || hasTreeTraversal || hasLearning || hasPair ? "flex flex-col" : "flex min-h-[360px] flex-col justify-center rounded-[24px] border border-trace-border bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_34%),linear-gradient(180deg,rgba(30,42,74,0.7),rgba(26,26,46,0.96))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"}>
           {isIdle ? (
             <div className="mx-auto max-w-[260px] text-center">
               <p className="text-xl font-medium text-trace-text-secondary">
@@ -91,15 +98,17 @@ function App() {
 
           {!isIdle && !isLoading && !isEmptyCompleted && currentSnapshot ? (
             <div className="flex flex-col gap-3">
+              <OperationDetails />
               {hasGridSearch ? <GridSearchViz /> : null}
+              {hasLearning ? <RecursionDPViz key={state.snapshots[0]?.frameId + ':' + state.snapshots.length} model={learning} /> : null}
               {hasTreeTraversal ? <VizRouter /> : null}
               {/* Pinned above the structures once recursion is in play — the
                   frame you're in is the context for everything below it. */}
-              {(currentSnapshot?.callStack.length ?? 0) > 1 ? (
-                <CallStackViz frames={currentSnapshot!.callStack} />
+              {!hasTreeTraversal && !hasLearning && (currentSnapshot?.callStack.length ?? 0) > 1 ? (
+                <CallStackViz frames={currentSnapshot!.callStack} event={currentSnapshot.event}/>
               ) : null}
-              {hasGridSearch ? <details className="text-xs text-trace-text-secondary"><summary className="cursor-pointer">Call details and output</summary><div className="mt-2"><StepDetails /></div></details> : <StepDetails />}
-              {!hasTreeTraversal ? <VizRouter /> : null}
+              {hasGridSearch || hasTreeTraversal || hasLearning || hasPair ? <details className="text-xs text-trace-text-secondary"><summary className="cursor-pointer">Call details and output</summary><div className="mt-2"><StepDetails /></div></details> : <StepDetails />}
+              {!hasTreeTraversal ? hasLearning ? <details className="text-xs text-trace-text-secondary"><summary className="cursor-pointer">Other structures</summary><VizRouter excludedIds={learning.table ? [learning.table.name] : []} /></details> : <VizRouter /> : null}
               <VariableInspector />
             </div>
           ) : null}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LeetTrace · Linked-list refinement</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:24px;background:#0d1321;color:#e5edf9;font:13px system-ui}button,select{font:inherit;color:inherit;background:#202e47;border:1px solid #394861;border-radius:6px;padding:7px;cursor:pointer}button:disabled{opacity:.4;cursor:default}button:focus-visible,select:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.toolbar{max-width:650px;margin:auto auto 16px;display:flex;gap:8px;flex-wrap:wrap}.panel{width:400px;max-width:100%;margin:auto;background:#131c30;border:1px solid #2c3a55;border-radius:12px;padding:17px}header{font-size:22px;font-weight:700;padding-bottom:14px;border-bottom:1px solid #2c3a55}header span{color:#38bdf8}h1{font-size:17px;margin:18px 0 8px}h2{font-size:12px;margin:0 0 12px}.muted,small{color:#a2afc7;font-size:11px;line-height:1.6}.action{margin:12px 0;padding:11px;border-left:3px solid #38bdf8;background:#38bdf80c}.action p{margin:6px 0 0;color:#b7c5dc;font-size:12px;line-height:1.6}.card{background:#19243c;border:1px solid #2c3a55;border-radius:9px;padding:13px;margin:12px 0}.nodes{display:flex;justify-content:space-around;gap:12px;padding:10px 0}.node{min-width:65px;text-align:center}.node button{width:60px;min-height:50px;font:20px ui-monospace,monospace;background:#202d47}.node.current button{border:2px solid #38bdf8;background:#174766}.node.saved button{outline:1px dashed #f5ca72;outline-offset:3px}.tags{display:flex;flex-direction:column;gap:3px;min-height:52px;padding-top:9px;font:10px ui-monospace,monospace;color:#38bdf8}.tags .saved{color:#f5ca72}.node small{display:block;margin-bottom:6px}.links{font:13px/2 ui-monospace,monospace;border-top:1px solid #2c3a55;padding-top:8px}.links div{padding:0 7px}.links .changed{background:#284d42;color:#92e5bc;border-radius:4px}.nulls{border-top:1px solid #2c3a55;padding-top:8px;color:#a2afc7;font-size:11px}.flow{font:13px/1.9 ui-monospace,monospace;color:#91d9ff;overflow-wrap:anywhere}.code{font:11px/1.9 ui-monospace,monospace;white-space:pre-wrap;color:#a2afc7}.code .active{display:block;background:#174766;color:#d9f2ff;border-left:2px solid #38bdf8;padding-left:5px}.history{max-height:132px;overflow:auto;display:grid;gap:5px}.history button{text-align:left;font-size:11px}.nav{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0}.footer{display:block;margin:16px 0 0;color:#a2afc7;font-size:11px;text-align:center}
+.node-diagram{position:relative}.node-diagram .nodes{padding-top:42px}.node-arrows{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}.node-arrows text{font:11px ui-monospace,monospace;fill:#b7c5dc}.node-arrows path.link{fill:none;stroke:#8daac8;stroke-width:2}.node-arrows path.link.changed{stroke:#92e5bc;stroke-width:3}
+</style>
+<div class="toolbar"><select id="scenario" aria-label="Example"><option value="normal">Reverse [2, 4, 7]</option><option value="duplicates">Duplicate values [2, 2, 7]</option><option value="empty">Empty list</option></select><button id="narrow">400 px</button><button id="wide">550 px</button><span class="muted">Illustrative preview · awaiting review</span></div>
+<main class="panel"><header><span>▸</span> LeetTrace</header><h1>Change the links. Keep track of the nodes.</h1><p class="muted">Linked-list reversal · nodes keep their positions and identity.</p>
+<nav class="nav" aria-label="Playback"><button id="prev">← Back</button><span id="count"></span><button id="next">Next →</button></nav>
+<div class="action" aria-live="polite"><strong id="title"></strong><p id="explain"></p></div>
+<section class="card"><h2>Nodes & pointers</h2><div class="node-diagram" id="diagram"><div class="nodes" id="nodes"></div><svg class="node-arrows" id="arrows" role="img" aria-label="Current next links between nodes"></svg></div><div class="nulls" id="nulls"></div><p class="muted">A / B / C identify nodes, even when values repeat.<br>Cyan: curr · dashed amber: saved nxt</p><div class="links" id="links"></div><p class="muted" id="inspect">Select a node to inspect its next link.</p></section>
+<section class="card"><h2>Follow the links from each pointer</h2><div class="flow" id="flow"></div><p class="muted">These paths refer to the same nodes above.</p></section>
+<section class="card"><h2>Completed statement</h2><div class="code" id="code"></div></section>
+<h2>Changes so far · select to revisit</h2><div class="history" id="history"></div><a class="footer" href="https://tally.so/r/2EWO8D" target="_blank" rel="noreferrer">Suggest a feature or report a bug ↗</a>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const source=['prev = None; curr = head','while curr:','    nxt = curr.next','    curr.next = prev','    prev = curr','    curr = nxt','return prev'];
+let events=[],step=2,selected=null,values=[];
+const name=i=>i===null?'None':'ABC'[i];
+function setup(){
+ values=$('scenario').value==='empty'?[]:$('scenario').value==='duplicates'?[2,2,7]:[2,4,7];
+ let links=values.map((_,i)=>i+1<values.length?i+1:null),prev=null,curr=values.length?0:null,nxt=null;
+ events=[];
+ const add=(title,explain,line,changed=null)=>events.push({title,explain,line,changed,links:[...links],prev,curr,nxt});
+ add('Start with the original chain','prev is None. curr and head point to the first node.',0);
+ while(curr!==null){
+  nxt=links[curr];add('Save the next node',`nxt now points to ${name(nxt)}. Keep this reference before changing ${name(curr)}.next.`,2);
+  const old=links[curr];links[curr]=prev;add('Reverse one link',`${name(curr)}.next changed from ${name(old)} to ${name(prev)}. curr has not moved.`,3,curr);
+  prev=curr;add('Move prev to curr',`prev now points to ${name(prev)}. Moving a pointer does not change a link.`,4);
+  curr=nxt;add('Move curr to the saved node',`curr now points to ${name(curr)}.${curr===null?' No nodes remain to process.':' Continue with this node.'}`,5);
+ }
+ add('Return the reversed list',values.length?`Return prev (${name(prev)}). head still points to A; it was never reassigned.`:'Return None. There are no nodes to reverse.',6);
+ if(!values.length)events[0].explain='head, prev and curr are None. The loop body is skipped.';
+ step=Math.min(step,events.length-1);selected=null;render();
+}
+function path(i,links){let out=[];while(i!==null&&out.length<4){out.push(name(i));i=links[i]}return out.concat('None').join(' → ')}
+function drawArrows(){
+ const svg=$('arrows'), bounds=$('diagram').getBoundingClientRect(), e=events[step];
+ const boxes=Array.from(document.querySelectorAll('[data-node]')).map(b=>b.getBoundingClientRect());
+ svg.setAttribute('viewBox',`0 0 ${bounds.width || 1} ${bounds.height || 1}`);
+ svg.innerHTML='<defs><marker id="next-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#8daac8"/></marker><marker id="changed-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#92e5bc"/></marker></defs>';
+ e.links.forEach((target,i)=>{
+  const b=boxes[i], y=b.top-bounds.top+b.height/2, x=b.left-bounds.left+b.width/2;
+  let d;
+  if(target===null){
+   const side=b.right-bounds.left+9;
+   d=`M ${b.right-bounds.left+2} ${y} L ${side} ${y} L ${side} 25 L ${x} 25 L ${x} 17`;
+   svg.innerHTML+=`<text x="${x}" y="11" text-anchor="middle">None</text>`;
+  }else{
+   const t=boxes[target], right=target>i;
+   d=`M ${(right?b.right:b.left)-bounds.left+(right?2:-2)} ${y} L ${(right?t.left:t.right)-bounds.left+(right?-3:3)} ${t.top-bounds.top+t.height/2}`;
+  }
+  svg.innerHTML+=`<path class="link ${e.changed===i?'changed':''}" data-from="${name(i)}" data-to="${name(target)}" d="${d}" marker-end="url(#${e.changed===i?'changed-tip':'next-tip'})"><title>${name(i)}.next points to ${name(target)}</title></path>`;
+ });
+}
+function render(){let e=events[step];$('count').textContent=`Event ${step+1} / ${events.length}`;$('prev').disabled=step===0;$('next').disabled=step===events.length-1;$('title').textContent=e.title;$('explain').textContent=e.explain;
+ $('nodes').innerHTML=values.map((v,i)=>`<div class="node ${e.curr===i?'current':''} ${e.nxt===i?'saved':''}"><small>Node ${name(i)}</small><button data-node="${i}" aria-label="Inspect node ${name(i)}, value ${v}">${v}</button><div class="tags">${[['head',values.length?0:null],['prev',e.prev],['curr',e.curr],['nxt',e.nxt]].filter(([n,j])=>j===i&&(n!=='nxt'||step>0)).map(([n])=>`<span class="${n==='nxt'?'saved':''}">↑ ${n}</span>`).join('')}</div></div>`).join('')||'<p class="muted">Empty list · no nodes</p>';
+ $('nulls').textContent=[['head',values.length?0:null],['prev',e.prev],['curr',e.curr],...(step>0&&values.length?[['nxt',e.nxt]]:[])].filter(([,i])=>i===null).map(([n])=>`${n} = None`).join(' · ');
+ $('links').innerHTML=e.links.map((j,i)=>`<div class="${e.changed===i?'changed':''}">${name(i)}.next → ${name(j)} ${e.changed===i?' · changed':''}</div>`).join('');
+ $('inspect').textContent=selected===null?'Select a node to inspect its next link.':`Node ${name(selected)} · value ${values[selected]} · next = ${name(e.links[selected])}`;
+ $('flow').innerHTML=`prev: ${path(e.prev,e.links)}<br>curr: ${path(e.curr,e.links)}`;
+ $('code').innerHTML=source.map((line,i)=>i===e.line?`<span class="active">${line}</span>`:line+'\n').join('');
+ $('history').innerHTML=events.slice(0,step+1).map((q,i)=>`<button data-step="${i}">${i+1} · ${q.title}</button>`).join('');
+ drawArrows();
+ document.querySelectorAll('[data-node]').forEach(b=>b.onclick=()=>{selected=+b.dataset.node;render()});document.querySelectorAll('[data-step]').forEach(b=>b.onclick=()=>{step=+b.dataset.step;render()});
+}
+$('prev').onclick=()=>{step--;render()};$('next').onclick=()=>{step++;render()};$('scenario').onchange=()=>{step=0;setup()};$('narrow').onclick=()=>document.querySelector('.panel').style.width='400px';$('wide').onclick=()=>document.querySelector('.panel').style.width='550px';setup();
+new ResizeObserver(drawArrows).observe($('diagram'));
+</script></html>

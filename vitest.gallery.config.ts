@@ -9,6 +9,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Generates real Python fixtures for the full refinement batch.
+    testTimeout: 30000,
     include: ['tests/dev/**/*.render.tsx'],
     environment: 'jsdom',
   },

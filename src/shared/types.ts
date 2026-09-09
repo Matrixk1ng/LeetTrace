@@ -13,6 +13,15 @@ export type TraceEvent = 'line' | 'call' | 'return';
 
 /** Syntactic references on this statement, not proof an operand was evaluated. */
 export interface VisualReferences {
+  operation?: {
+    roles: Record<string, 'adjacency' | 'parents' | 'lower-bound' | 'upper-bound' | 'exclusive-upper-bound' | 'midpoint' | 'sorted-sequence' | 'intervals' | 'window-start' | 'window-end' | 'window-values' | 'visited-set'>;
+    upcoming?: OperationObservation;
+    completed?: OperationObservation;
+  };
+  binary?: BinaryObservation;
+  window?: WindowObservation;
+  pair?: PairObservation;
+  learning?: LearningEvent[];
   offsets?: { target: string; base: string }[];
   queueOperation?: { kind: 'append' | 'popleft'; queue: string; targets?: [string, string] };
   levelLoop?: { line: number; queue: string } | null;
@@ -20,8 +29,76 @@ export interface VisualReferences {
   cells: { structure: string; indices: [string | number, string | number]; write: boolean }[];
 }
 
+export interface OperationObservation {
+  line: number;
+  source: string;
+  kind: string;
+  names: string[];
+  before: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  outcome?: boolean;
+  operands: { expression: string; value: unknown }[];
+  accesses: { name: string; indices: unknown[]; write: boolean; membership?: boolean }[];
+  cache?: { name: string; hits: number; misses: number }[];
+}
+
+export interface BinaryComparison {
+  mid: number; value: number; target: number; operator: string; outcome: boolean;
+  bounds: [number, number];
+}
+export interface BinaryObservation {
+  kind: 'bounds' | 'state' | 'midpoint' | 'move' | 'compare';
+  structure: string; identity: string;
+  lowName: string; highName: string; midName: string;
+  low: number; high: number; previous: [number, number];
+  mid?: number; midCurrent: boolean;
+  comparison?: BinaryComparison;
+  lastComparison?: BinaryComparison;
+}
+
+export interface WindowObservation {
+  kind: 'init' | 'state' | 'add' | 'remove' | 'check' | 'save' | 'condition';
+  mode?: 'variable';
+  condition?: { total: number; target: number; outcome?: boolean };
+  structure: string;
+  identity: string;
+  aggregate: string;
+  width: number;
+  indices: number[];
+  total: number;
+  before?: number;
+  index?: number;
+  value?: number;
+  best?: { name: string; value: number; indices: number[] };
+}
+
+export interface PairObservation {
+  identity: string;
+  structure: string;
+  names: [string, string];
+  indices: [number, number];
+  kind: 'read' | 'sum' | 'compare' | 'move' | 'state';
+  values?: [number, number];
+  previous?: [number, number];
+  pair?: { indices: [number, number]; values: [number, number]; sum: number; line: number };
+  comparison?: { sum: number; target: number; operator: string; outcome: boolean; indices: [number, number]; values: [number, number] };
+}
+
+export interface LearningEvent {
+  keyType?: 'tuple';
+  kind: 'memo-write' | 'stored-return' | 'table-read' | 'table-write';
+  structure: string;
+  identity: string;
+  key: number | string;
+  value: unknown;
+  reads?: number[];
+  operands?: number[];
+}
+
 /** One frame of the call stack at a given step. */
 export interface StackFrame {
+  /** Bound parameter values captured at call entry, not subsequently mutated locals. */
+  arguments?: Record<string, VariableState>;
   /** Unambiguous tree argument for a recursive call, including empty children. */
   treeNode?: { name: string; nodeId: string | null; value: unknown };
   frameId: string;
